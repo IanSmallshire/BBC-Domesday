@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BBC Domesday Walk Navigator</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --panel: #16213e;
+      --accent: #e94560;
+      --text: #eaeaea;
+      --dim: #777;
+      --btn-active: #0f3460;
+      --btn-hover: #e94560;
+      --btn-disabled: #2a2a3e;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 1rem;
+      gap: 1rem;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      letter-spacing: 0.15em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    #main-layout {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+      width: 100%;
+      max-width: 1100px;
+    }
+
+    /* ── Frame display ── */
+    #frame-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    /* ── Frame image container (for overlay positioning) ── */
+    #frame-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4/3;
+    }
+
+    #frame-img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      border: 2px solid var(--accent);
+      object-fit: fill;
+      display: none;
+    }
+
+    #frame-placeholder {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      border: 2px solid var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--dim);
+      font-size: 0.9rem;
+    }
+
+    #detail-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .detail-dot {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border: 2px solid #ffe000;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      pointer-events: auto;
+      box-sizing: border-box;
+      background: rgba(255, 224, 0, 0.1);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .detail-dot:hover {
+      background: rgba(255, 224, 0, 0.3);
+      border-color: #fff;
+    }
+    .detail-dot::after {
+      content: '⌖';
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #ffe000;
+      pointer-events: none;
+    }
+
+    /* ── Right side: controls + info ── */
+    #right-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      width: 280px;
+      flex-shrink: 0;
+    }
+
+    /* ── Compass navigation ── */
+    #compass {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    #compass-middle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    #compass-rose {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: var(--panel);
+      border: 2px solid #2a5080;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--dim);
+      font-size: 0.6rem;
+      letter-spacing: 0.05em;
+      user-select: none;
+    }
+
+    .nav-btn {
+      background: var(--btn-active);
+      border: 1px solid #2a5080;
+      color: var(--text);
+      font-family: inherit;
+      padding: 8px 10px;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.15s;
+      border-radius: 3px;
+      min-width: 64px;
+      text-align: center;
+    }
+
+    .nav-btn:hover:not(:disabled) { background: var(--btn-hover); }
+
+    .nav-btn:disabled {
+      background: var(--btn-disabled);
+      color: var(--dim);
+      cursor: not-allowed;
+      border-color: #333;
+    }
+
+    /* ── Info panel ── */
+    #info-panel {
+      background: var(--panel);
+      border: 1px solid #2a5080;
+      border-radius: 4px;
+      padding: 0.75rem;
+      font-size: 0.8rem;
+      line-height: 1.7;
+    }
+
+    #info-panel .label { color: var(--dim); }
+    #info-panel .value { color: var(--accent); font-weight: bold; }
+
+    /* ── Plan thumbnail ── */
+    #plan-section {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    #plan-label {
+      font-size: 0.7rem;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    #plan-container {
+      position: relative;
+      width: 100%;
+      display: none;
+    }
+
+    #plan-img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: #000;
+      border: 1px solid #2a5080;
+      object-fit: contain;
+      display: block;
+    }
+
+    #plan-marker {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      pointer-events: none;
+      display: none;
+      transform-origin: center center;
+    }
+
+    /* ── Home button ── */
+    #btn-home {
+      background: var(--panel);
+      border: 1px solid #2a5080;
+      color: var(--dim);
+      padding: 5px 8px;
+      font-size: 0.7rem;
+      font-family: inherit;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      text-transform: uppercase;
+      border-radius: 3px;
+      align-self: flex-start;
+    }
+    #btn-home:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ── Status bar ── */
+    #status {
+      font-size: 0.75rem;
+      color: var(--dim);
+      min-height: 1.2em;
+    }
+
+    /* ── Loading dimming ── */
+    #frame-panel.loading #frame-img { opacity: 0.4; }
+    #frame-panel.loading #detail-overlay { opacity: 0.2; }
+
+    /* ── Plan expand hint ── */
+    #plan-expand-hint { font-size: 0.65rem; color: var(--dim); }
+
+    /* ── Map modal ── */
+    #map-modal {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #map-modal-bg {
+      position: absolute; inset: 0; background: rgba(0,0,0,0.85);
+    }
+    #map-modal-inner {
+      position: relative; z-index: 1;
+      background: var(--panel); border: 2px solid var(--accent);
+      border-radius: 6px; padding: 10px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #map-modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.8rem; color: var(--accent);
+    }
+    #map-modal-header button {
+      background: transparent; border: 1px solid var(--accent);
+      color: var(--accent); font-family: inherit; font-size: 0.75rem;
+      padding: 2px 8px; cursor: pointer; border-radius: 3px;
+    }
+    #map-modal-header button:hover { background: var(--accent); color: #fff; }
+    #map-container {
+      position: relative;
+      width: min(80vw, calc(72vh * 4 / 3));
+      aspect-ratio: 4/3;
+    }
+    #map-img { width: 100%; height: 100%; object-fit: fill; background: #000; display: block; }
+    #map-positions { position: absolute; inset: 0; pointer-events: none; }
+    .map-pos {
+      position: absolute; width: 10px; height: 10px; border-radius: 50%;
+      transform: translate(-50%,-50%); cursor: pointer; pointer-events: auto;
+      background: rgba(14,52,96,0.9); border: 1.5px solid #4a90d0;
+      transition: all 0.1s;
+    }
+    .map-pos:hover { background: var(--accent); border-color: #fff; width: 14px; height: 14px; z-index: 1; }
+    .map-pos.current { background: var(--accent); border-color: #fff; width: 14px; height: 14px; }
+    .map-pos-arrow {
+      position: absolute; pointer-events: none;
+      transform-origin: center center; line-height: 0;
+    }
+    #map-hint { font-size: 0.65rem; color: var(--dim); text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>BBC Domesday Walk Navigator</h1>
+
+  <div id="main-layout">
+    <div id="frame-panel">
+      <div id="frame-container">
+        <img id="frame-img" alt="Domesday frame">
+        <div id="frame-placeholder">Loading…</div>
+        <div id="detail-overlay"></div>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div id="right-panel">
+      <!-- Compass navigation -->
+      <div id="compass">
+        <button class="nav-btn" id="btn-n" data-dir="forward" title="Move forward (↑)">▲ Forward</button>
+        <div id="compass-middle">
+          <button class="nav-btn" id="btn-w" data-dir="turn_left"  title="Turn left (←)">◄ Left</button>
+          <div id="compass-rose">N</div>
+          <button class="nav-btn" id="btn-e" data-dir="turn_right" title="Turn right (→)">Right ►</button>
+        </div>
+        <button class="nav-btn" id="btn-s" data-dir="back" title="Move back (↓)">▼ Back</button>
+      </div>
+
+      <!-- Info panel -->
+      <div id="info-panel">
+        <div><span class="label">View:    </span> <span class="value" id="info-view">—</span></div>
+        <div><span class="label">Frame:   </span> <span class="value" id="info-frame">—</span></div>
+        <div><span class="label">Dataset: </span> <span class="value" id="info-dataset">Gallery</span></div>
+        <div><span class="label">Fwd→:    </span> <span class="value" id="info-forward">—</span></div>
+      </div>
+
+      <!-- Home button -->
+      <button id="btn-home" onclick="goHome()" title="Return to gallery start">&#8962; Home</button>
+
+      <!-- Plan thumbnail -->
+      <div id="plan-section">
+        <div id="plan-label">Plan view <span id="plan-expand-hint">(click to expand)</span></div>
+        <div id="plan-container" onclick="openMapModal()" style="cursor:pointer">
+          <img id="plan-img" alt="Plan view">
+          <div id="plan-marker">
+            <svg viewBox="0 0 14 14" width="14" height="14">
+              <polygon points="7,1 13,13 7,10 1,13" fill="#e94560" stroke="#fff" stroke-width="0.5"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map modal -->
+  <div id="map-modal" style="display:none">
+    <div id="map-modal-bg" onclick="closeMapModal()"></div>
+    <div id="map-modal-inner">
+      <div id="map-modal-header">
+        <span>Walk Map</span>
+        <button onclick="closeMapModal()">&#x2715; Close</button>
+      </div>
+      <div id="map-container">
+        <img id="map-img" alt="Walk map">
+        <svg id="map-lines" viewBox="0 0 100 100" preserveAspectRatio="none"
+             style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible"></svg>
+        <div id="map-positions"></div>
+      </div>
+      <div id="map-hint">Click a position to navigate there &middot; Esc to close</div>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────
+    let currentView = null;
+    let currentDatasetOffset = 0;   // byte offset in GALLERY file; 0 = main gallery
+    let currentNode = null;
+
+    // BBC Micro display coordinate constants (from sdhd.h)
+    const BBC_W      = 1280;  // display area width (x: 0-1279)
+    const BBC_DISH   = 888;   // display area height (y: 0-887, Y=0 at BOTTOM)
+    const BBC_FULL_H = 1024;  // full BBC screen height in graphics units
+    const DIS_Y0     = 76;    // m.sd.disY0: display area Y origin in full BBC coords
+
+    // BBC Master PAL timing — the BBC's active display does not fill the entire
+    // PAL video frame; overscan areas are outside the BBC coordinate space.
+    //
+    // Horizontal (2 MHz CRTC, R0=127, R1=80, R2=98):
+    //   Display start ≈ 4.6 µs into 52 µs active video → H_OFFSET = 4.6/52 = 8.65 %
+    //   Display width ≈ 40 µs / 52 µs of active video → H_SCALE  = 40/52 = 76.9 %
+    //
+    // Vertical (256 display lines/field, 288 PAL active lines/field):
+    //   Offset = (288−256)/2/288 = 5.56 %  → V_SCALE = 88.88 %
+    // PAL geometry — all four overridden at boot from /api/config
+    let BBC_H_OFFSET = 8.65;   // % from JPEG left where BBC x=0 appears
+    let BBC_H_SCALE  = 76.9;   // % of JPEG width covered by BBC x range
+    let BBC_V_OFFSET = 5.56;   // % from JPEG top where BBC y=1023 appears
+    let BBC_V_SCALE  = 88.88;  // % of JPEG height covered by BBC y range
+
+    // Map BBC display-area coords → JPEG image percentages.
+    //   1. Add DIS_Y0 to convert display-area Y to full BBC screen Y.
+    //   2. Apply PAL horizontal and vertical margins.
+    //   3. Invert Y (BBC Y=0 is at screen bottom).
+    function bbcToImagePct(x, y) {
+      const bbc_y = y + DIS_Y0;
+      return [
+        BBC_H_OFFSET + (x / BBC_W) * BBC_H_SCALE,
+        BBC_V_OFFSET + (BBC_FULL_H - bbc_y) / BBC_FULL_H * BBC_V_SCALE,
+      ];
+    }
+
+    // ── DOM refs ────────────────────────────────────────────────────────────
+    const frameImg         = document.getElementById('frame-img');
+    const framePlaceholder = document.getElementById('frame-placeholder');
+    const framePanel       = document.getElementById('frame-panel');
+    const detailOverlay    = document.getElementById('detail-overlay');
+    const statusEl         = document.getElementById('status');
+    const planContainer    = document.getElementById('plan-container');
+    const planImg          = document.getElementById('plan-img');
+    const planMarker       = document.getElementById('plan-marker');
+
+    const infoView    = document.getElementById('info-view');
+    const infoFrame   = document.getElementById('info-frame');
+    const infoDataset = document.getElementById('info-dataset');
+    const infoForward = document.getElementById('info-forward');
+
+    // All nav buttons
+    const navButtons = document.querySelectorAll('.nav-btn');
+
+    // ── API helpers ─────────────────────────────────────────────────────────
+    async function apiGet(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      return r.json();
+    }
+
+    // ── Render a node ────────────────────────────────────────────────────────
+    function renderNode(node) {
+      currentNode = node;
+      currentView = node.view;
+      if (typeof node.dataset_offset === 'number') {
+        currentDatasetOffset = node.dataset_offset;
+      }
+
+      // Update info panel
+      infoView.textContent    = node.view;
+      infoFrame.textContent   = node.frame;
+      infoDataset.textContent = currentDatasetOffset === 0 ? 'Gallery' : `Walk @${currentDatasetOffset}`;
+      infoForward.textContent = node.forward !== null ? `view ${node.forward}` : 'dead end';
+
+      // Load frame image
+      setStatus('Loading frame…');
+      const src = `/frame/${node.frame}`;
+      frameImg.onload = () => {
+        framePlaceholder.style.display = 'none';
+        frameImg.style.display = 'block';
+        framePanel.classList.remove('loading');
+        setStatus('');
+      };
+      frameImg.onerror = () => {
+        framePlaceholder.textContent = `Frame ${node.frame} not found`;
+        framePlaceholder.style.display = 'flex';
+        frameImg.style.display = 'none';
+        framePanel.classList.remove('loading');
+        setStatus('Frame image missing');
+      };
+      framePanel.classList.add('loading');
+      frameImg.src = src;
+
+      // Plan image + position marker
+      updatePlanMarker(node);
+
+      // Detail icon overlay
+      updateDetailOverlay(node);
+
+      // Update navigation buttons
+      updateNavButtons(node);
+    }
+
+    // ── Plan position marker ──────────────────────────────────────────────
+    function updatePlanMarker(node) {
+      if (node.plan_frame !== null && node.plan !== null) {
+        planImg.src = `/frame/${node.plan_frame}`;
+        planContainer.style.display = 'block';
+
+        // Plan coords are in BBC display space (X 0-1279, Y 0-887, Y=0 at BOTTOM).
+        const [xPct, yPct] = bbcToImagePct(node.plan.x, node.plan.y);
+
+        // Facing direction: BCPL formula (8 - base_direction + view) mod 8, then × 45°
+        const dir = ((8 - node.plan.base_direction + node.view) % 8 + 8) % 8;
+        planMarker.style.left      = `${xPct}%`;
+        planMarker.style.top       = `${yPct}%`;
+        planMarker.style.transform = `translate(-50%, -50%) rotate(${dir * 45}deg)`;
+        planMarker.style.display   = 'block';
+      } else {
+        planContainer.style.display = 'none';
+        planMarker.style.display    = 'none';
+      }
+    }
+
+    // ── Detail icon overlay ───────────────────────────────────────────────
+    function updateDetailOverlay(node) {
+      detailOverlay.innerHTML = '';  // clear previous icons
+
+      // Detail icons only appear in walk mode (not gallery, syslev=1)
+      if (!node.details || node.details.length === 0) return;
+
+      for (const d of node.details) {
+        // Detail coords are in BBC display space (same as plan coords)
+        const [xPct, yPct] = bbcToImagePct(d.x, d.y);
+        const dot = document.createElement('div');
+        dot.className = 'detail-dot';
+        dot.style.left = `${xPct}%`;
+        dot.style.top  = `${yPct}%`;
+        dot.title = `Interactive item (offset ${d.item_offset})`;
+        dot.addEventListener('click', () => {
+          setStatus(`Item at (${d.x}, ${d.y}) — offset ${d.item_offset}`);
+        });
+        detailOverlay.appendChild(dot);
+      }
+    }
+
+    function updateNavButtons(node) {
+      const fwd  = node.forward !== null || node.linked_dataset;
+      const back = node.navigable && node.navigable.back;
+      document.getElementById('btn-n').disabled = !fwd;
+      document.getElementById('btn-s').disabled = !back;
+      // Turning is always possible
+      document.getElementById('btn-w').disabled = false;
+      document.getElementById('btn-e').disabled = false;
+    }
+
+    // ── Navigation ───────────────────────────────────────────────────────────
+    async function navigate(direction) {
+      if (currentView === null) return;
+      setStatus(`Moving ${direction}…`);
+      try {
+        const node = await apiGet(`/api/navigate/${currentView}/${direction}?dataset=${currentDatasetOffset}`);
+        renderNode(node);
+      } catch (err) {
+        setStatus(`No move: ${err.message}`);
+      }
+    }
+
+    async function goHome() {
+      currentDatasetOffset = 0;
+      setStatus('Returning to gallery start…');
+      try {
+        const node = await apiGet('/api/initial');
+        renderNode(node);
+        setStatus('');
+      } catch (err) {
+        setStatus(`Failed: ${err.message}`);
+      }
+    }
+
+    navButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dir = btn.dataset.dir;
+        if (dir) navigate(dir);
+      });
+    });
+
+    // Keyboard controls
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closeMapModal(); return; }
+      const map = {
+        'ArrowUp':    'forward',
+        'ArrowDown':  'back',
+        'ArrowLeft':  'turn_left',
+        'ArrowRight': 'turn_right',
+      };
+      if (map[e.key]) {
+        e.preventDefault();
+        navigate(map[e.key]);
+      }
+    });
+
+    // ── Map modal ─────────────────────────────────────────────────────────────
+    async function openMapModal() {
+      if (!currentNode?.plan) return;
+      const pn = currentNode.plan.plan_number;
+      setStatus('Loading walk map…');
+      try {
+        const data = await apiGet(
+          `/api/plan_nodes?dataset=${currentDatasetOffset}&plan_number=${pn}`
+        );
+        document.getElementById('map-img').src = `/frame/${data.plan_frame}`;
+
+        // Draw forward-link edges as SVG lines
+        const svg = document.getElementById('map-lines');
+        svg.innerHTML = '';
+        for (const edge of data.edges) {
+          const src = data.positions[edge.from];
+          const dst = data.positions[edge.to];
+          const [x1, y1] = bbcToImagePct(src.x, src.y);
+          const [x2, y2] = bbcToImagePct(dst.x, dst.y);
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+          line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+          line.setAttribute('stroke', 'rgba(74,144,208,0.35)');
+          line.setAttribute('stroke-width', '0.5');
+          svg.appendChild(line);
+        }
+
+        // Place position dots
+        const container = document.getElementById('map-positions');
+        container.innerHTML = '';
+        // Compute direction for current-position arrow (same formula as plan marker)
+        const curDir = currentNode?.plan
+          ? (((8 - currentNode.plan.base_direction + currentNode.view) % 8) + 8) % 8
+          : 0;
+        for (const pos of data.positions) {
+          const [xPct, yPct] = bbcToImagePct(pos.x, pos.y);
+          if (pos.view === currentView) {
+            // Render current position as a red directional arrow
+            const arrow = document.createElement('div');
+            arrow.className = 'map-pos-arrow';
+            arrow.style.cssText = `left:${xPct}%;top:${yPct}%;transform:translate(-50%,-50%) rotate(${curDir * 45}deg)`;
+            arrow.title = `Current position (view ${pos.view})`;
+            arrow.innerHTML = `<svg viewBox="0 0 14 14" width="20" height="20">
+              <polygon points="7,1 13,13 7,10 1,13" fill="#e94560" stroke="#fff" stroke-width="0.8"/>
+            </svg>`;
+            container.appendChild(arrow);
+          } else {
+            const dot = document.createElement('div');
+            dot.className = 'map-pos';
+            dot.style.cssText = `left:${xPct}%;top:${yPct}%`;
+            dot.title = `View ${pos.view}`;
+            dot.onclick = () => { jumpToView(pos.view); closeMapModal(); };
+            container.appendChild(dot);
+          }
+        }
+        document.getElementById('map-modal').style.display = 'flex';
+        setStatus('');
+      } catch (err) {
+        setStatus(`Map failed: ${err.message}`);
+      }
+    }
+
+    async function jumpToView(view) {
+      setStatus(`Jumping to view ${view}…`);
+      try {
+        const node = await apiGet(`/api/view/${view}?dataset=${currentDatasetOffset}`);
+        renderNode(node);
+        setStatus('');
+      } catch (err) {
+        setStatus(`Failed: ${err.message}`);
+      }
+    }
+
+    function closeMapModal() {
+      document.getElementById('map-modal').style.display = 'none';
+    }
+
+    // ── Utilities ────────────────────────────────────────────────────────────
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
+    async function boot() {
+      currentDatasetOffset = 0;
+      try {
+        const cfg = await apiGet('/api/config');
+        if (typeof cfg.bbc_h_offset === 'number') BBC_H_OFFSET = cfg.bbc_h_offset;
+        if (typeof cfg.bbc_h_scale  === 'number') BBC_H_SCALE  = cfg.bbc_h_scale;
+        if (typeof cfg.bbc_v_offset === 'number') BBC_V_OFFSET = cfg.bbc_v_offset;
+        if (typeof cfg.bbc_v_scale  === 'number') BBC_V_SCALE  = cfg.bbc_v_scale;
+      } catch (_) { /* use defaults */ }
+      setStatus('Loading initial view…');
+      try {
+        const node = await apiGet('/api/initial');
+        renderNode(node);
+      } catch (err) {
+        setStatus(`Failed to load: ${err.message}`);
+        framePlaceholder.textContent = 'Failed to load gallery';
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>
