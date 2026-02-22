@@ -306,6 +306,66 @@
       transform-origin: center center; line-height: 0;
     }
     #map-hint { font-size: 0.65rem; color: var(--dim); text-align: center; }
+
+    /* ── Detail modal ── */
+    #detail-modal {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #detail-modal-bg {
+      position: absolute; inset: 0; background: rgba(0,0,0,0.85);
+    }
+    #detail-modal-inner {
+      position: relative; z-index: 1;
+      background: var(--panel); border: 2px solid var(--accent);
+      border-radius: 6px; padding: 10px;
+      display: flex; flex-direction: column; gap: 8px;
+      width: min(90vw, calc(72vh * 4 / 3));
+    }
+    #detail-modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.8rem; color: var(--accent);
+    }
+    #detail-modal-header button {
+      background: transparent; border: 1px solid var(--accent);
+      color: var(--accent); font-family: inherit; font-size: 0.75rem;
+      padding: 2px 8px; cursor: pointer; border-radius: 3px;
+    }
+    #detail-modal-header button:hover { background: var(--accent); color: #fff; }
+    #detail-frame-container {
+      width: 100%; aspect-ratio: 4/3; background: #000;
+    }
+    #detail-frame-img { width: 100%; height: 100%; object-fit: fill; display: block; }
+    #detail-nav {
+      display: flex; justify-content: center; align-items: center; gap: 1rem;
+      font-size: 0.75rem;
+    }
+    #detail-nav button {
+      background: var(--btn-active); border: 1px solid #2a5080;
+      color: var(--text); font-family: inherit; font-size: 0.75rem;
+      padding: 4px 12px; cursor: pointer; border-radius: 3px;
+    }
+    #detail-nav button:hover:not(:disabled) { background: var(--btn-hover); }
+    #detail-nav button:disabled { background: var(--btn-disabled); color: var(--dim); cursor: not-allowed; }
+    #detail-counter { color: var(--dim); display: flex; align-items: center; gap: 0.3em; }
+    #detail-num {
+      width: 3.5em; text-align: center;
+      background: var(--bg); border: 1px solid #2a5080;
+      color: var(--text); font-family: inherit; font-size: 0.75rem;
+      padding: 2px 4px; border-radius: 3px;
+    }
+    #detail-num::-webkit-inner-spin-button, #detail-num::-webkit-outer-spin-button { opacity: 0.5; }
+    #detail-slider { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 0; }
+    #detail-caption {
+      font-size: 0.82rem; color: var(--accent); text-align: center; min-height: 1.1em;
+    }
+    #detail-description {
+      font-size: 0.72rem; color: var(--dim); white-space: pre-line;
+      max-height: 7em; overflow-y: auto; line-height: 1.35;
+      padding: 0.4rem 0.5rem; border: 1px solid #2a5080;
+      border-radius: 3px; background: var(--bg);
+    }
+    .map-pos.has-details { background: rgba(0,140,60,0.9); border-color: #00d060; }
   </style>
 </head>
 <body>
@@ -356,6 +416,35 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Detail modal -->
+  <div id="detail-modal" style="display:none">
+    <div id="detail-modal-bg" onclick="closeDetailModal()"></div>
+    <div id="detail-modal-inner">
+      <div id="detail-modal-header">
+        <span id="detail-modal-title">Detail</span>
+        <button onclick="closeDetailModal()">&#x2715; Close</button>
+      </div>
+      <div id="detail-frame-container">
+        <img id="detail-frame-img" alt="Detail view">
+      </div>
+      <div id="detail-caption"></div>
+      <div id="detail-description" style="display:none"></div>
+      <div id="detail-nav">
+        <button id="detail-btn-first" onclick="goDetail(0)" title="First (Home)">|&#9664;</button>
+        <button id="detail-btn-prev" onclick="stepDetail(-1)" title="Previous (←)">&#9664; Prev</button>
+        <span id="detail-counter">
+          <input id="detail-num" type="number" min="1" max="1" value="1"
+                 onchange="goDetail(+this.value - 1)">
+          / <span id="detail-total">1</span>
+        </span>
+        <button id="detail-btn-next" onclick="stepDetail(1)" title="Next (→)">Next &#9654;</button>
+        <button id="detail-btn-last" onclick="goDetail(_detailFrames.length - 1)" title="Last (End)">&#9654;|</button>
+      </div>
+      <input id="detail-slider" type="range" min="1" max="1" value="1" style="display:none"
+             oninput="goDetail(+this.value - 1)">
     </div>
   </div>
 
@@ -520,9 +609,7 @@
         dot.style.left = `${xPct}%`;
         dot.style.top  = `${yPct}%`;
         dot.title = `Interactive item (offset ${d.item_offset})`;
-        dot.addEventListener('click', () => {
-          setStatus(`Item at (${d.x}, ${d.y}) — offset ${d.item_offset}`);
-        });
+        dot.addEventListener('click', () => openDetailModal(d.item_offset));
         detailOverlay.appendChild(dot);
       }
     }
@@ -570,7 +657,20 @@
 
     // Keyboard controls
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closeMapModal(); return; }
+      if (e.key === 'Escape') { closeMapModal(); closeDetailModal(); return; }
+
+      // When the detail modal is open, arrow/Home/End keys navigate photos
+      if (document.getElementById('detail-modal').style.display !== 'none'
+          && _detailFrames.length > 0) {
+        if (e.target.id === 'detail-num') return; // let the number input handle its own keys
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); stepDetail(-1); return; }
+        if (e.key === 'ArrowRight') { e.preventDefault(); stepDetail(1);  return; }
+        if (e.key === 'Home')       { e.preventDefault(); goDetail(0); return; }
+        if (e.key === 'End')        { e.preventDefault(); goDetail(_detailFrames.length - 1); return; }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); return; }
+        return;
+      }
+
       const map = {
         'ArrowUp':    'forward',
         'ArrowDown':  'back',
@@ -631,9 +731,9 @@
             container.appendChild(arrow);
           } else {
             const dot = document.createElement('div');
-            dot.className = 'map-pos';
+            dot.className = 'map-pos' + (pos.has_details ? ' has-details' : '');
             dot.style.cssText = `left:${xPct}%;top:${yPct}%`;
-            dot.title = `View ${pos.view}`;
+            dot.title = `View ${pos.view}` + (pos.has_details ? ' (has detail icons)' : '');
             dot.onclick = () => { jumpToView(pos.view); closeMapModal(); };
             container.appendChild(dot);
           }
@@ -658,6 +758,104 @@
 
     function closeMapModal() {
       document.getElementById('map-modal').style.display = 'none';
+    }
+
+    // ── Detail modal ──────────────────────────────────────────────────────────
+    let _detailFrames = [];
+    let _detailCaptions = [];
+    let _detailDescriptions = [];
+    let _detailIndex = 0;
+
+    async function openDetailModal(item_offset) {
+      setStatus('Loading detail…');
+      try {
+        const data = await apiGet(
+          `/api/detail?dataset=${currentDatasetOffset}&item_offset=${item_offset}`
+        );
+        _detailFrames = data.frames;
+        _detailCaptions = data.captions || [];
+        _detailDescriptions = data.descriptions || [];
+        _detailIndex = 0;
+        const TYPE_LABELS = {8:'Photo', 6:'Text', 7:'Text', 9:'Walk', 10:'Film'};
+        const typeLabel = TYPE_LABELS[data.type] ?? 'Detail';
+        document.getElementById('detail-modal-title').textContent =
+          data.title ? `${typeLabel}: ${data.title}` : typeLabel;
+        _renderDetailModal();
+        document.getElementById('detail-modal').style.display = 'flex';
+        setStatus('');
+      } catch (err) {
+        const msg = err.message.includes('503')
+          ? 'Detail unavailable (NAMES file not present)'
+          : `Detail failed: ${err.message}`;
+        setStatus(msg);
+      }
+    }
+
+    function _renderDetailModal() {
+      const frameContainer = document.getElementById('detail-frame-container');
+      const nav = document.getElementById('detail-nav');
+      const slider = document.getElementById('detail-slider');
+      const captionEl = document.getElementById('detail-caption');
+      const descEl = document.getElementById('detail-description');
+
+      if (_detailFrames.length === 0) {
+        // Non-photo gallery item — show message, hide nav and caption areas
+        frameContainer.innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:center;' +
+          'height:100%;color:var(--dim);font-size:0.8rem;text-align:center;padding:1rem;">' +
+          'No image available for this item type.</div>';
+        nav.style.display = 'none';
+        slider.style.display = 'none';
+        captionEl.textContent = '';
+        descEl.style.display = 'none';
+        return;
+      }
+
+      // Restore img element if it was replaced by the text fallback
+      if (!document.getElementById('detail-frame-img')) {
+        frameContainer.innerHTML = '<img id="detail-frame-img" alt="Detail view" style="width:100%;height:100%;object-fit:fill;display:block;">';
+      }
+
+      const n = _detailFrames.length;
+      const i = _detailIndex;
+
+      nav.style.display = 'flex';
+      slider.style.display = n > 1 ? 'block' : 'none';
+
+      document.getElementById('detail-frame-img').src = `/frame/${_detailFrames[i]}`;
+
+      // Sync number input, total label, and slider
+      const numEl = document.getElementById('detail-num');
+      numEl.max = n;
+      numEl.value = i + 1;
+      document.getElementById('detail-total').textContent = n;
+      slider.max = n;
+      slider.value = i + 1;
+
+      // Button states
+      document.getElementById('detail-btn-first').disabled = i === 0;
+      document.getElementById('detail-btn-prev').disabled = i === 0;
+      document.getElementById('detail-btn-next').disabled = i === n - 1;
+      document.getElementById('detail-btn-last').disabled = i === n - 1;
+
+      // Caption and description for this photo
+      captionEl.textContent = _detailCaptions[i] || '';
+      const description = _detailDescriptions[i] || '';
+      descEl.textContent = description;
+      descEl.style.display = description ? 'block' : 'none';
+    }
+
+    function goDetail(idx) {
+      _detailIndex = Math.max(0, Math.min(_detailFrames.length - 1, idx));
+      _renderDetailModal();
+    }
+
+    function stepDetail(dir) {
+      goDetail(_detailIndex + dir);
+    }
+
+    function closeDetailModal() {
+      document.getElementById('detail-modal').style.display = 'none';
     }
 
     // ── Utilities ────────────────────────────────────────────────────────────

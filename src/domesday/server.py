@@ -24,7 +24,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from domesday.models import Node, WalkDataset
-from domesday.parser import leftof, load_gallery, load_gallery_subdataset, load_walk, rightof
+from domesday.parser import (
+    decode_names_address, leftof, load_gallery, load_gallery_subdataset, load_walk,
+    parse_closeup_frames, parse_gallery_item, parse_names_record, parse_photo_set, rightof,
+)
 from domesday.export import discover_walks
 
 # ---------------------------------------------------------------------------
@@ -37,6 +40,7 @@ _app_state: dict[str, Any] = {
     "gallery_path": None,
     "data1_path": None,
     "data2_path": None,
+    "names_path": None,     # Path to national NAMES file
     "bbc_h_offset":  8.65,  # % from JPEG left where BBC x=0 appears (PAL timing)
     "bbc_h_scale":  76.9,   # % of JPEG width covered by BBC x range (0-1279)
     "bbc_v_offset":  5.56,  # % from JPEG top where BBC y=1023 appears (PAL timing)
@@ -284,6 +288,48 @@ async def get_walks():
     return JSONResponse(walks)
 
 
+@app.get("/api/detail")
+async def get_detail(dataset: int = 0, item_offset: int = 0):
+    """Return detail info for a detail icon (gallery NAMES lookup or walk closeup chain)."""
+    ds = _load_dataset_by_offset(dataset)
+    gallery_path: Path | None = _app_state.get("gallery_path")
+    if gallery_path is None:
+        raise HTTPException(status_code=503, detail="Gallery path not configured")
+    data = gallery_path.read_bytes()
+
+    if ds.syslev == 1:
+        # Gallery mode: resolve via NAMES file
+        names_path: Path | None = _app_state.get("names_path")
+        if names_path is None:
+            raise HTTPException(status_code=503, detail="NAMES file not configured or not found")
+        record_index = parse_gallery_item(data[dataset:], ds.dtable_byte, item_offset)
+        rec = parse_names_record(names_path.read_bytes(), record_index)
+
+        if rec['type'] == 8:  # Photo — decode address, read photo set from DATA1/DATA2
+            is_data2, file_offset = decode_names_address(rec['address'])
+            data_path: Path | None = _app_state.get("data2_path" if is_data2 else "data1_path")
+            if data_path is None:
+                raise HTTPException(status_code=503, detail="DATA1/DATA2 not configured")
+            photo = parse_photo_set(data_path, file_offset)
+            frames = photo['frames']
+            captions = photo['captions']
+            descriptions = photo['descriptions']
+        else:
+            frames, captions, descriptions = [], [], []
+
+        return JSONResponse({
+            'frames': frames,
+            'captions': captions,
+            'descriptions': descriptions,
+            'title': rec['title'],
+            'type': rec['type'],
+        })
+    else:
+        # Walk mode: closeup chain (existing behaviour, no captions)
+        frames = parse_closeup_frames(data[dataset:], ds.dtable_byte, item_offset, ds.base_view)
+        return JSONResponse({'frames': frames, 'captions': [], 'descriptions': [], 'title': '', 'type': -1})
+
+
 @app.get("/api/plan_nodes")
 async def get_plan_nodes(dataset: int = 0, plan_number: int = 0):
     """Return all unique plan positions and their forward-link edges for a given dataset and plan number."""
@@ -297,13 +343,20 @@ async def get_plan_nodes(dataset: int = 0, plan_number: int = 0):
             key = (node.plan.x, node.plan.y)
             if key not in pos_index:
                 pos_index[key] = len(positions)
-                positions.append({"view": v, "x": node.plan.x, "y": node.plan.y})
+                positions.append({
+                    "view": v,
+                    "x": node.plan.x,
+                    "y": node.plan.y,
+                    "has_details": len(node.details) > 0,
+                })
 
     # Build edges between unique positions (forward links)
     edge_set: set[tuple[int, int]] = set()
     edges: list[dict] = []
     for node in ds.nodes.values():
         if node.plan is None or node.plan.plan_number != plan_number or node.forward is None:
+            continue
+        if node.linked_dataset:  # forward points into a different dataset — skip
             continue
         fwd = ds.nodes.get(node.forward)
         if fwd is None or fwd.plan is None or fwd.plan.plan_number != plan_number:
@@ -373,9 +426,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Path to DATA2 file (for linked walk datasets)",
     )
     p.add_argument(
+        '--names',
+        type=Path,
+        default=Path(os.environ.get('DOMESDAY_NAMES', 'data/NationalA/VFS/NAMES')),
+        help='Path to national NAMES file for gallery item lookup',
+    )
+    p.add_argument(
         "--bbc-h-offset",
         type=float,
-        default=float(os.environ.get("DOMESDAY_BBC_H_OFFSET", "8.65")),
+        default=float(os.environ.get("DOMESDAY_BBC_H_OFFSET", "12.5")),
         help="Horizontal offset (%%) — BBC x=0 position in JPEG frame (default: 8.65)",
     )
     p.add_argument(
@@ -420,6 +479,12 @@ def main() -> None:
     _app_state["gallery_path"] = args.gallery
     _app_state["data1_path"] = args.data1 if args.data1.exists() else None
     _app_state["data2_path"] = args.data2 if args.data2.exists() else None
+    if args.names.exists():
+        _app_state["names_path"] = args.names
+        print(f"  NAMES file: {args.names}")
+    else:
+        _app_state["names_path"] = None
+        print(f"  Warning: NAMES file not found at {args.names} — gallery detail lookup disabled")
     _app_state["bbc_h_offset"] = args.bbc_h_offset
     _app_state["bbc_h_scale"]  = args.bbc_h_scale
     _app_state["bbc_v_offset"] = args.bbc_v_offset

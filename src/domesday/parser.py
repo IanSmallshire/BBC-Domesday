@@ -78,6 +78,135 @@ def unpack_plan_position(data: bytes, byte_offset: int, view: int) -> PlanPositi
     return PlanPosition(x=plan_x, y=plan_y, plan_number=plan_number, base_direction=base_dir)
 
 
+def parse_gallery_item(data: bytes, dtable_byte: int, item_offset: int) -> int:
+    """Gallery mode: read the 32-bit NAMES record index stored at dtable_byte + item_offset*2."""
+    return struct.unpack_from('<I', data, dtable_byte + item_offset * 2)[0]
+
+
+# Item types from BCPL sthd.h
+NAMES_TYPE_LABELS = {
+    1: 'Map', 2: 'Map', 3: 'Map',
+    4: 'Chart',
+    6: 'Text', 7: 'Text',
+    8: 'Photo',
+    9: 'Walk',
+    10: 'Film',
+}
+
+
+def parse_names_record(names_data: bytes, record_index: int) -> dict:
+    """Read one 36-byte NAMES record.
+
+    Layout:
+      bytes  0-30: title string (strip trailing spaces/nulls)
+      byte  31:    item type (0-10)
+      bytes 32-35: 32-bit LaserDisc frame address (little-endian uint32)
+    """
+    pos = record_index * 36
+    title = names_data[pos:pos + 31].decode('latin-1').rstrip('\x00 ')
+    while title and ord(title[0]) < 0x20:
+        title = title[1:]
+    item_type = names_data[pos + 31]
+    address = struct.unpack_from('<I', names_data, pos + 32)[0]
+    return {'title': title, 'type': item_type, 'address': address}
+
+
+def decode_names_address(address32: int) -> tuple[bool, int]:
+    """Decode a 32-bit NAMES address into (is_data2, file_byte_offset).
+
+    Bit 15 of the high word is the DATA2 flag; remaining 31 bits are the byte offset.
+    """
+    low = address32 & 0xFFFF
+    high = (address32 >> 16) & 0xFFFF
+    is_data2 = bool(high & 0x8000)
+    return is_data2, (high & 0x7FFF) * 65536 + low
+
+
+def parse_photo_frames(data_path: Path, file_offset: int) -> list[int]:
+    """Read frame numbers from a photo set stored in DATA1 or DATA2.
+
+    Photo record layout at file_offset:
+      bytes  0-27: header / padding
+      bytes 28-29: num_pics_raw (uint16 LE); actual count = value & 0x7FFF
+      bytes 30 + i*2: frame_i (uint16 LE) for i in 0..num_pics-1
+    """
+    with data_path.open('rb') as f:
+        f.seek(file_offset + 28)
+        num_pics_raw = struct.unpack('<H', f.read(2))[0]
+        num_pics = num_pics_raw & 0x7FFF
+        frame_bytes = f.read(num_pics * 2)
+    return [struct.unpack_from('<H', frame_bytes, i * 2)[0] for i in range(num_pics)]
+
+
+def parse_photo_set(data_path: Path, file_offset: int) -> dict:
+    """Read frames, short captions, and long descriptions from a photo set in DATA1/DATA2.
+
+    Photo record layout at file_offset:
+      bytes  0-27: header / padding
+      bytes 28-29: num_pics_raw (uint16 LE)
+                   bit 15 = 0 → 4-line long captions (m.np.small.lc × 39 = 156 bytes each)
+                   bit 15 = 1 → 8-line long captions (m.np.large.lc × 39 = 312 bytes each)
+                   bits 0-14  → num_pics
+      bytes 30 + i*2:                    frame[i] (uint16 LE), i = 0..num_pics-1
+      bytes 30 + num_pics*2 + i*30:      short_caption[i] (30 bytes), i = 0..num_pics-1
+      bytes above + num_pics*30 + i*lcs: long_caption[i] (lcs bytes), i = 0..num_pics-1
+
+    Returns dict with keys 'frames', 'captions', 'descriptions' (all lists, one entry per photo).
+    """
+    SC_LEN = 30   # m.np.sclength
+    LC_LEN = 39   # m.np.lclength (chars per line)
+
+    with data_path.open('rb') as f:
+        f.seek(file_offset + 28)
+        num_pics_raw = struct.unpack('<H', f.read(2))[0]
+        num_pics = num_pics_raw & 0x7FFF
+        descr_lines = 8 if (num_pics_raw & 0x8000) else 4
+        lc_size = descr_lines * LC_LEN  # bytes per long caption entry
+
+        # Frames (file pointer is now at file_offset + 30)
+        frame_bytes = f.read(num_pics * 2)
+        frames = [struct.unpack_from('<H', frame_bytes, i * 2)[0] for i in range(num_pics)]
+
+        # Short captions (immediately follow frame list)
+        sc_bytes = f.read(num_pics * SC_LEN)
+        captions = []
+        for i in range(num_pics):
+            raw = sc_bytes[i * SC_LEN:(i + 1) * SC_LEN]
+            cap = raw.decode('latin-1').rstrip('\x00 ')
+            while cap and ord(cap[0]) < 0x20:
+                cap = cap[1:]
+            captions.append(cap)
+
+        # Long captions (immediately follow short captions)
+        lc_bytes = f.read(num_pics * lc_size)
+        descriptions = []
+        for i in range(num_pics):
+            lines = []
+            for ln in range(descr_lines):
+                start = i * lc_size + ln * LC_LEN
+                line = lc_bytes[start:start + LC_LEN].decode('latin-1').rstrip('\x00 ')
+                if line:
+                    lines.append(line)
+            descriptions.append('\n'.join(lines))
+
+    return {'frames': frames, 'captions': captions, 'descriptions': descriptions}
+
+
+def parse_closeup_frames(data: bytes, dtable_byte: int, item_offset: int, base_view: int) -> list[int]:
+    """Return absolute LaserDisc frame numbers for a detail closeup chain.
+
+    Layout at dtable_byte + item_offset*2:
+      word 0 (uint16): count N
+      words 1..N (int16): frame offsets relative to base_view
+    """
+    pos = dtable_byte + item_offset * 2
+    count = _read_u16(data, pos)
+    return [
+        base_view + _read_i16(data, pos + cu * 2)
+        for cu in range(1, count + 1)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Internal parsing helpers
 # ---------------------------------------------------------------------------
@@ -230,6 +359,7 @@ def parse_dataset(data: bytes, source_file: Path | None = None, byte_offset: int
         base_plan=base_plan,
         initial_view=initial_view,
         nodes=nodes,
+        dtable_byte=dtable_byte,
     )
 
 

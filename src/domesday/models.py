@@ -48,6 +48,7 @@ class WalkDataset:
     base_plan: int  # LaserDisc frame offset for plan frames
     initial_view: int  # first view to show (from ctable entry 0)
     nodes: dict[int, Node]  # view → Node
+    dtable_byte: int = 0  # byte offset of dtable within dataset (from header r(20))
 
     def get_frame_path(self, frame: int, jpgimg_root: Path) -> Path:
         folder = f"{frame // 1000:02d}"
