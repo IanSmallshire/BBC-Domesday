@@ -192,6 +192,56 @@ def parse_photo_set(data_path: Path, file_offset: int) -> dict:
     return {'frames': frames, 'captions': captions, 'descriptions': descriptions}
 
 
+def parse_essay(data_path: Path, file_offset: int) -> dict:
+    """Read a National Essay (type 6 or 7) from DATA1 or DATA2.
+
+    Layout at file_offset:
+      bytes   0-27:  header (28 bytes)
+      bytes  28-227: photo data (200 bytes, 25 × 8-byte records; skipped)
+      bytes 228-229: num_pages (uint16 LE)
+      bytes 230 + i*30: title_i (30 bytes, m.ne.title.size), i = 0..num_pages
+        title[0] = article title; title[1..n] = per-page sub-titles
+      bytes 230 + (num_pages+1)*30 + p*858: page_p (858 bytes, p = 0..num_pages-1)
+        byte 0 bit 7 = monospaced flag (strip before display)
+        22 lines × 39 chars (m.ne.nolines=22, m.sd.linelength=39)
+    """
+    TITLE_LEN = 30   # m.ne.title.size
+    LINE_LEN  = 39   # m.sd.linelength
+    LINES     = 22   # m.ne.nolines
+    PAGE_SIZE = LINE_LEN * LINES  # 858
+
+    with data_path.open('rb') as f:
+        f.seek(file_offset + 228)
+        num_pages = struct.unpack('<H', f.read(2))[0]
+
+        # Titles: num_pages+1 entries of 30 bytes each
+        title_bytes = f.read((num_pages + 1) * TITLE_LEN)
+        titles = []
+        for i in range(num_pages + 1):
+            raw = title_bytes[i * TITLE_LEN:(i + 1) * TITLE_LEN]
+            t = raw.decode('latin-1').rstrip('\x00 ')
+            while t and ord(t[0]) < 0x20:
+                t = t[1:]
+            titles.append(t)
+
+        # Text pages
+        pages = []
+        for _ in range(num_pages):
+            page_data = bytearray(f.read(PAGE_SIZE))
+            if len(page_data) < PAGE_SIZE:
+                break
+            page_data[0] &= 0x7F  # strip monospaced flag from first byte
+            lines = []
+            for i in range(LINES):
+                line = page_data[i * LINE_LEN:(i + 1) * LINE_LEN].decode('latin-1').rstrip('\x00 ')
+                lines.append(line)
+            while lines and not lines[-1]:
+                lines.pop()
+            pages.append('\n'.join(lines))
+
+    return {'num_pages': num_pages, 'titles': titles, 'pages': pages}
+
+
 def parse_closeup_frames(data: bytes, dtable_byte: int, item_offset: int, base_view: int) -> list[int]:
     """Return absolute LaserDisc frame numbers for a detail closeup chain.
 

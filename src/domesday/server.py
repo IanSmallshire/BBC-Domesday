@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from domesday.models import Node, WalkDataset
 from domesday.parser import (
     decode_names_address, leftof, load_gallery, load_gallery_subdataset, load_walk,
-    parse_closeup_frames, parse_gallery_item, parse_names_record, parse_photo_set, rightof,
+    parse_closeup_frames, parse_essay, parse_gallery_item, parse_names_record, parse_photo_set,
+    rightof,
 )
 from domesday.export import discover_walks
 
@@ -311,23 +312,52 @@ async def get_detail(dataset: int = 0, item_offset: int = 0):
             if data_path is None:
                 raise HTTPException(status_code=503, detail="DATA1/DATA2 not configured")
             photo = parse_photo_set(data_path, file_offset)
-            frames = photo['frames']
-            captions = photo['captions']
-            descriptions = photo['descriptions']
+            return JSONResponse({
+                'frames': photo['frames'],
+                'captions': photo['captions'],
+                'descriptions': photo['descriptions'],
+                'pages': [],
+                'page_titles': [],
+                'title': rec['title'],
+                'type': rec['type'],
+            })
+        elif rec['type'] in (6, 7):  # Essay / Picture Essay
+            is_data2, file_offset = decode_names_address(rec['address'])
+            data_path = _app_state.get("data2_path" if is_data2 else "data1_path")
+            if data_path is None:
+                raise HTTPException(status_code=503, detail="DATA1/DATA2 not configured")
+            essay = parse_essay(data_path, file_offset)
+            return JSONResponse({
+                'frames': [],
+                'captions': [],
+                'descriptions': [],
+                'pages': essay['pages'],
+                'page_titles': essay['titles'],
+                'title': rec['title'],
+                'type': rec['type'],
+            })
         else:
-            frames, captions, descriptions = [], [], []
-
-        return JSONResponse({
-            'frames': frames,
-            'captions': captions,
-            'descriptions': descriptions,
-            'title': rec['title'],
-            'type': rec['type'],
-        })
+            return JSONResponse({
+                'frames': [],
+                'captions': [],
+                'descriptions': [],
+                'pages': [],
+                'page_titles': [],
+                'title': rec['title'],
+                'type': rec['type'],
+            })
     else:
         # Walk mode: closeup chain (existing behaviour, no captions)
         frames = parse_closeup_frames(data[dataset:], ds.dtable_byte, item_offset, ds.base_view)
-        return JSONResponse({'frames': frames, 'captions': [], 'descriptions': [], 'title': '', 'type': -1})
+        return JSONResponse({
+            'frames': frames,
+            'captions': [],
+            'descriptions': [],
+            'pages': [],
+            'page_titles': [],
+            'title': '',
+            'type': -1,
+        })
 
 
 @app.get("/api/plan_nodes")
