@@ -27,7 +27,7 @@ from domesday.models import Node, WalkDataset
 from domesday.parser import (
     decode_names_address, leftof, load_gallery, load_gallery_subdataset, load_walk,
     parse_closeup_frames, parse_essay, parse_gallery_item, parse_names_record, parse_photo_set,
-    rightof,
+    probe_data_type, rightof,
 )
 from domesday.export import discover_walks
 
@@ -333,6 +333,7 @@ async def get_detail(dataset: int = 0, item_offset: int = 0):
                 'descriptions': [],
                 'pages': essay['pages'],
                 'page_titles': essay['titles'],
+                'figures': essay['figures'],
                 'title': rec['title'],
                 'type': rec['type'],
             })
@@ -357,6 +358,79 @@ async def get_detail(dataset: int = 0, item_offset: int = 0):
             'page_titles': [],
             'title': '',
             'type': -1,
+        })
+
+
+@app.get("/api/detail_titles")
+async def get_detail_titles(dataset: int = 0, view: int = 0):
+    """Return {item_offset: {title, type}} for all detail icons in a view.
+
+    Gallery mode: resolves NAMES title. Walk mode: returns frame count label.
+    """
+    ds = _load_dataset_by_offset(dataset)
+    node = ds.nodes.get(view)
+    if node is None or not node.details:
+        return JSONResponse({})
+    gallery_path: Path | None = _app_state.get("gallery_path")
+    if gallery_path is None:
+        return JSONResponse({})
+    data = gallery_path.read_bytes()
+    result = {}
+
+    if ds.syslev == 1:
+        names_path: Path | None = _app_state.get("names_path")
+        if names_path is None:
+            return JSONResponse({})
+        names_data = names_path.read_bytes()
+        for icon in node.details:
+            try:
+                record_index = parse_gallery_item(data[dataset:], ds.dtable_byte, icon.item_offset)
+                rec = parse_names_record(names_data, record_index)
+                result[str(icon.item_offset)] = {'title': rec['title'], 'type': rec['type']}
+            except Exception:
+                pass
+    else:
+        for icon in node.details:
+            try:
+                frames = parse_closeup_frames(
+                    data[dataset:], ds.dtable_byte, icon.item_offset, ds.base_view
+                )
+                n = len(frames)
+                result[str(icon.item_offset)] = {
+                    'title': f'Close-up ({n} frame{"s" if n != 1 else ""})',
+                    'type': -1,
+                }
+            except Exception:
+                pass
+
+    return JSONResponse(result)
+
+
+@app.get("/api/figure_photos")
+async def get_figure_photos(address: int):
+    """Decode a raw 32-bit figure address and return the photo set or essay at that location."""
+    is_data2, file_offset = decode_names_address(address)
+    data_path: Path | None = _app_state.get("data2_path" if is_data2 else "data1_path")
+    if data_path is None:
+        raise HTTPException(status_code=503, detail="DATA file not configured")
+    content_type = probe_data_type(data_path, file_offset)
+    if content_type == 'essay':
+        essay = parse_essay(data_path, file_offset)
+        return JSONResponse({
+            'frames': [], 'captions': [], 'descriptions': [],
+            'pages': essay['pages'],
+            'page_titles': essay['titles'],
+            'figures': essay['figures'],
+            'title': 'Figure', 'type': 6,
+        })
+    else:
+        photo = parse_photo_set(data_path, file_offset)
+        return JSONResponse({
+            'frames': photo['frames'],
+            'captions': photo['captions'],
+            'descriptions': photo['descriptions'],
+            'pages': [], 'page_titles': [], 'figures': [],
+            'title': 'Figure', 'type': 8,
         })
 
 

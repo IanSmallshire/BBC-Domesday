@@ -197,7 +197,9 @@ def parse_essay(data_path: Path, file_offset: int) -> dict:
 
     Layout at file_offset:
       bytes   0-27:  header (28 bytes)
-      bytes  28-227: photo data (200 bytes, 25 × 8-byte records; skipped)
+      bytes  28-227: figure records (200 bytes, 25 × 8-byte records; m.ne.rsize=8, m.ne.phosize=25)
+        Each record: offset 0-1 page_num (uint16), offset 2-5 address (uint32 LE),
+                     offset 6-7 pnum (int16; use 1 if ≤ 0). Valid when address != 0xFFFFFFFF.
       bytes 228-229: num_pages (uint16 LE)
       bytes 230 + i*30: title_i (30 bytes, m.ne.title.size), i = 0..num_pages
         title[0] = article title; title[1..n] = per-page sub-titles
@@ -205,12 +207,29 @@ def parse_essay(data_path: Path, file_offset: int) -> dict:
         byte 0 bit 7 = monospaced flag (strip before display)
         22 lines × 39 chars (m.ne.nolines=22, m.sd.linelength=39)
     """
-    TITLE_LEN = 30   # m.ne.title.size
-    LINE_LEN  = 39   # m.sd.linelength
-    LINES     = 22   # m.ne.nolines
-    PAGE_SIZE = LINE_LEN * LINES  # 858
+    TITLE_LEN    = 30   # m.ne.title.size
+    LINE_LEN     = 39   # m.sd.linelength
+    LINES        = 22   # m.ne.nolines
+    PAGE_SIZE    = LINE_LEN * LINES  # 858
+    FIGURE_RSIZE = 8    # m.ne.rsize
+    MAX_FIGURES  = 25   # m.ne.phosize
 
     with data_path.open('rb') as f:
+        # Figure records (bytes 28–227)
+        f.seek(file_offset + 28)
+        fig_raw = f.read(MAX_FIGURES * FIGURE_RSIZE)
+        figures: list = []
+        for i in range(MAX_FIGURES):
+            addr = struct.unpack_from('<I', fig_raw, i * FIGURE_RSIZE + 2)[0]
+            if addr == 0xFFFFFFFF:
+                figures.append(None)
+            else:
+                page_num = struct.unpack_from('<h', fig_raw, i * FIGURE_RSIZE + 6)[0]
+                figures.append({'address': addr, 'page_num': max(1, page_num)})
+        # Strip trailing Nones
+        while figures and figures[-1] is None:
+            figures.pop()
+
         f.seek(file_offset + 228)
         num_pages = struct.unpack('<H', f.read(2))[0]
 
@@ -239,7 +258,25 @@ def parse_essay(data_path: Path, file_offset: int) -> dict:
                 lines.pop()
             pages.append('\n'.join(lines))
 
-    return {'num_pages': num_pages, 'titles': titles, 'pages': pages}
+    return {'num_pages': num_pages, 'titles': titles, 'pages': pages, 'figures': figures}
+
+
+def probe_data_type(data_path: Path, file_offset: int) -> str:
+    """Heuristically detect whether file_offset points to a photo set or an essay.
+
+    Photo sets have num_pics_raw (uint16) at offset+28, where num_pics = val & 0x7FFF.
+    Essays have 25 × 8-byte figure records at offset+28-227, then num_pages at offset+228.
+
+    Returns 'photo' if num_pics is in 1-200 (a plausible photo count);
+    returns 'essay' otherwise (0 or implausibly large → likely first figure record page_num).
+    """
+    with data_path.open('rb') as f:
+        f.seek(file_offset + 28)
+        raw = f.read(2)
+    if len(raw) < 2:
+        return 'photo'
+    num_pics = struct.unpack_from('<H', raw)[0] & 0x7FFF
+    return 'photo' if 1 <= num_pics <= 200 else 'essay'
 
 
 def parse_closeup_frames(data: bytes, dtable_byte: int, item_offset: int, base_view: int) -> list[int]:

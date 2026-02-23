@@ -375,6 +375,12 @@
       padding: 0.5rem; background: var(--bg);
       border: 1px solid #2a5080; border-radius: 3px; color: var(--text);
     }
+
+    .essay-fig-link {
+      color: var(--accent); cursor: pointer; text-decoration: underline;
+      font-weight: bold;
+    }
+    .essay-fig-link:hover { color: #fff; }
   </style>
 </head>
 <body>
@@ -467,6 +473,7 @@
     <div id="map-modal-inner">
       <div id="map-modal-header">
         <span>Walk Map</span>
+        <button id="btn-toggle-overlay" onclick="toggleMapOverlay()">&#9632; Hide overlay</button>
         <button onclick="closeMapModal()">&#x2715; Close</button>
       </div>
       <div id="map-container">
@@ -484,6 +491,7 @@
     let currentView = null;
     let currentDatasetOffset = 0;   // byte offset in GALLERY file; 0 = main gallery
     let currentNode = null;
+    let _mapOverlayVisible = true;
 
     // BBC Micro display coordinate constants (from sdhd.h)
     const BBC_W      = 1280;  // display area width (x: 0-1279)
@@ -608,23 +616,33 @@
     }
 
     // ── Detail icon overlay ───────────────────────────────────────────────
-    function updateDetailOverlay(node) {
-      detailOverlay.innerHTML = '';  // clear previous icons
-
-      // Detail icons only appear in walk mode (not gallery, syslev=1)
+    async function updateDetailOverlay(node) {
+      detailOverlay.innerHTML = '';
       if (!node.details || node.details.length === 0) return;
 
+      const dotMap = {};
       for (const d of node.details) {
-        // Detail coords are in BBC display space (same as plan coords)
         const [xPct, yPct] = bbcToImagePct(d.x, d.y);
         const dot = document.createElement('div');
         dot.className = 'detail-dot';
         dot.style.left = `${xPct}%`;
         dot.style.top  = `${yPct}%`;
-        dot.title = `Interactive item (offset ${d.item_offset})`;
+        dot.title = `Item (offset ${d.item_offset})`;
         dot.addEventListener('click', () => openDetailModal(d.item_offset));
         detailOverlay.appendChild(dot);
+        dotMap[d.item_offset] = dot;
       }
+
+      // Async title fetch — dots appear immediately; titles update once API returns
+      try {
+        const titles = await apiGet(
+          `/api/detail_titles?dataset=${currentDatasetOffset}&view=${node.view}`
+        );
+        for (const [offset, info] of Object.entries(titles)) {
+          const dot = dotMap[parseInt(offset)];
+          if (dot && info.title) dot.title = info.title;
+        }
+      } catch (_) {}
     }
 
     function updateNavButtons(node) {
@@ -697,8 +715,20 @@
     });
 
     // ── Map modal ─────────────────────────────────────────────────────────────
+    function toggleMapOverlay() {
+      _mapOverlayVisible = !_mapOverlayVisible;
+      document.getElementById('map-lines').style.display     = _mapOverlayVisible ? '' : 'none';
+      document.getElementById('map-positions').style.display = _mapOverlayVisible ? '' : 'none';
+      document.getElementById('btn-toggle-overlay').textContent =
+        (_mapOverlayVisible ? '\u25a0 Hide overlay' : '\u25a1 Show overlay');
+    }
+
     async function openMapModal() {
       if (!currentNode?.plan) return;
+      _mapOverlayVisible = true;
+      document.getElementById('map-lines').style.display     = '';
+      document.getElementById('map-positions').style.display = '';
+      document.getElementById('btn-toggle-overlay').textContent = '\u25a0 Hide overlay';
       const pn = currentNode.plan.plan_number;
       setStatus('Loading walk map…');
       try {
@@ -779,6 +809,7 @@
     let _detailDescriptions = [];
     let _detailPages = [];
     let _detailPageTitles = [];
+    let _essayFigures = [];
     let _detailIndex = 0;
 
     async function openDetailModal(item_offset) {
@@ -792,6 +823,7 @@
         _detailDescriptions = data.descriptions || [];
         _detailPages = data.pages || [];
         _detailPageTitles = data.page_titles || [];
+        _essayFigures = data.figures || [];
         _detailIndex = 0;
         const TYPE_LABELS = {8:'Photo', 6:'Text', 7:'Text', 9:'Walk', 10:'Film'};
         const typeLabel = TYPE_LABELS[data.type] ?? 'Detail';
@@ -817,7 +849,35 @@
     }
 
     function _formatEssayText(raw) {
-      return _escapeHtml(raw).replace(/\{([^}]*)\}/g, '<strong>$1</strong>');
+      return _escapeHtml(raw)
+        .replace(/\{([^}]*)\}/g, '<strong>$1</strong>')
+        .replace(/\[[^\d\]]*(\d{1,2})\]/g, (match, n) => {
+          const fig = _essayFigures[parseInt(n, 10) - 1];
+          return fig
+            ? `<span class="essay-fig-link" onclick="openEssayFigure(${n})">${match}</span>`
+            : match;
+        });
+    }
+
+    async function openEssayFigure(figNum) {
+      const fig = _essayFigures[figNum - 1];
+      if (!fig) return;
+      setStatus('Loading figure\u2026');
+      try {
+        const data = await apiGet(`/api/figure_photos?address=${fig.address}`);
+        _detailFrames       = data.frames || [];
+        _detailCaptions     = data.captions || [];
+        _detailDescriptions = data.descriptions || [];
+        _detailPages        = data.pages || [];
+        _detailPageTitles   = data.page_titles || [];
+        _essayFigures       = data.figures || [];
+        _detailIndex        = 0;
+        document.getElementById('detail-modal-title').textContent = `Figure [${figNum}]`;
+        _renderDetailModal();
+        setStatus('');
+      } catch (err) {
+        setStatus(`Figure failed: ${err.message}`);
+      }
     }
 
     function _renderDetailModal() {
