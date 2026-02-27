@@ -1,9 +1,13 @@
 """
-domesday.catalogue — Extract the full dataset catalogue from the National disc.
+domesday.catalogue — Extract the full dataset catalogue from a Domesday disc.
 
-Reads HIERARCHY (thesaurus tree) and NAMES (item index) and outputs every
-dataset reachable via the National Contents menu, together with its navigation
-path and item type.
+Supports both National and Community disc layouts (auto-detected).
+
+National disc: reads HIERARCHY (thesaurus tree) + NAMES and outputs every
+dataset reachable via the Contents menu with its navigation path and item type.
+
+Community disc: reads NAMES directly (no thesaurus) and outputs every text
+and photo item indexed by the keyword-search system.
 
 CLI usage
 ---------
@@ -11,10 +15,15 @@ CLI usage
 
 Programmatic usage
 ------------------
-    from domesday.catalogue import extract_catalogue
+    from domesday.catalogue import extract_catalogue, extract_community_catalogue
+    # National:
     entries = extract_catalogue(Path("data/NationalA"))
     for e in entries:
         print(" > ".join(e.path), "–", e.name, f"({e.type_name})")
+    # Community:
+    entries = extract_community_catalogue(Path("data/CommN"))
+    for e in entries:
+        print(e.name, f"[{e.type_name}]", f"frame {e.frame}")
 """
 
 import csv
@@ -98,7 +107,7 @@ class ThesRecord:
 
 @dataclass
 class DatasetEntry:
-    """One dataset item discovered in the catalogue."""
+    """One dataset item discovered in the National disc catalogue."""
     path:      list    # navigation path, e.g. ["People", "Households", "Composition"]
     name:      str     # item name from NAMES file
     item_type: int     # numeric type code
@@ -108,6 +117,20 @@ class DatasetEntry:
 
     def path_str(self, sep: str = " > ") -> str:
         return sep.join(self.path) if self.path else "(root)"
+
+
+@dataclass
+class CommunityEntry:
+    """One content item discovered in the Community disc NAMES file."""
+    frame:        int   # uint16 LaserDisc frame number of the data bundle
+    name:         str   # title from NAMES bytes 0-30 (BCPL string)
+    is_photo:     bool  # True if NAMES byte 31 bit 7 is set
+    page_or_pic:  int   # NAMES byte 31 bits 0-6 (page number or picture number)
+    record_no:    int   # 0-based index into the NAMES file
+
+    @property
+    def type_name(self) -> str:
+        return "Community Photo" if self.is_photo else "Community Text"
 
 
 # ── Low-level helpers ─────────────────────────────────────────────────────────
@@ -233,6 +256,42 @@ def extract_catalogue(data_dir: Path) -> list:
     return entries
 
 
+# ── Community disc detection and extraction ───────────────────────────────────
+
+
+def is_community_disc(data_dir: Path) -> bool:
+    """Return True if data_dir is a community disc (has MAPDATA1, no HIERARCHY)."""
+    return (data_dir / 'VFS' / 'MAPDATA1').exists()
+
+
+def extract_community_catalogue(data_dir: Path) -> list:
+    """Read all content items from a Community disc NAMES file.
+
+    Returns a list of CommunityEntry objects, one per non-empty NAMES record.
+    The community NAMES format differs from the National disc:
+      - byte 31 bit 7: 0 = text item, 1 = photo item  (not a numeric type code)
+      - bytes 32-33:   uint16 LE LaserDisc frame number (not a 32-bit byte offset)
+
+    Sorted by item name (case-insensitive).
+    """
+    names = (data_dir / 'VFS' / 'NAMES').read_bytes()
+    num_records = len(names) // NAMES_REC_SIZE
+    entries = []
+    for i in range(num_records):
+        off       = i * NAMES_REC_SIZE
+        rec       = names[off: off + NAMES_REC_SIZE]
+        name      = _bcpl_str(rec, NAMES_NAME)
+        type_byte = rec[NAMES_TYPE]
+        is_photo  = bool(type_byte & 0x80)
+        page_or_pic = type_byte & 0x7F
+        # Community NAMES: frame number is a uint16 at bytes 32-33 only
+        frame = struct.unpack_from('<H', rec, 32)[0]
+        if frame > 0 and name:
+            entries.append(CommunityEntry(frame, name, is_photo, page_or_pic, i))
+    entries.sort(key=lambda e: e.name.lower())
+    return entries
+
+
 # ── Output formatters ─────────────────────────────────────────────────────────
 
 def _format_text(entries: list) -> str:
@@ -266,16 +325,46 @@ def _format_json(entries: list) -> str:
     )
 
 
+def _format_community_text(entries: list) -> str:
+    lines     = []
+    prev_type = None
+    for e in entries:
+        if e.type_name != prev_type:
+            lines.append(f"\n{e.type_name}s")
+            prev_type = e.type_name
+        lines.append(f"  [Frame {e.frame:6d}] {e.name}")
+    return "\n".join(lines)
+
+
+def _format_community_csv(entries: list) -> str:
+    buf = io.StringIO()
+    w   = csv.writer(buf)
+    w.writerow(["name", "type", "frame", "page_or_pic", "record_no"])
+    for e in entries:
+        w.writerow([e.name, e.type_name, e.frame, e.page_or_pic, e.record_no])
+    return buf.getvalue()
+
+
+def _format_community_json(entries: list) -> str:
+    return json.dumps(
+        [{"name": e.name, "type": e.type_name, "frame": e.frame,
+          "page_or_pic": e.page_or_pic, "record_no": e.record_no}
+         for e in entries],
+        indent=2,
+    )
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(
-        description="List all datasets on the BBC Domesday National disc",
+        description="List all datasets on a BBC Domesday disc "
+                    "(National and Community discs supported)",
     )
     parser.add_argument(
         "--data", default="data/NationalA",
-        help="Path to NationalA data directory (default: data/NationalA)",
+        help="Path to disc data directory (default: data/NationalA)",
     )
     parser.add_argument(
         "--format", choices=["text", "csv", "json"], default="text",
@@ -283,7 +372,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--type", dest="filter_type", metavar="TYPE",
-        help='Filter by type name substring, e.g. "Essay", "Photo", "Grid map"',
+        help='Filter by type name substring, e.g. "Essay", "Photo", "Community Text"',
     )
     args = parser.parse_args(argv)
 
@@ -292,27 +381,52 @@ def main(argv=None):
         print(f"Error: data directory '{data_dir}' not found", file=sys.stderr)
         sys.exit(1)
 
-    entries = extract_catalogue(data_dir)
+    if is_community_disc(data_dir):
+        # ── Community disc ────────────────────────────────────────────────────
+        entries = extract_community_catalogue(data_dir)
 
-    if args.filter_type:
-        entries = [e for e in entries
-                   if args.filter_type.lower() in e.type_name.lower()]
+        if args.filter_type:
+            entries = [e for e in entries
+                       if args.filter_type.lower() in e.type_name.lower()]
 
-    if args.format == "text":
-        print(_format_text(entries))
-    elif args.format == "csv":
-        print(_format_csv(entries), end="")
-    elif args.format == "json":
-        print(_format_json(entries))
+        if args.format == "text":
+            print(_format_community_text(entries))
+        elif args.format == "csv":
+            print(_format_community_csv(entries), end="")
+        elif args.format == "json":
+            print(_format_community_json(entries))
 
-    if args.format == "text":
-        type_counts: dict = {}
-        for e in entries:
-            type_counts[e.type_name] = type_counts.get(e.type_name, 0) + 1
-        print(f"\n── Summary {'─' * 40}")
-        print(f"Total datasets: {len(entries)}")
-        for t, c in sorted(type_counts.items()):
-            print(f"  {t:<20s} {c:5d}")
+        if args.format == "text":
+            n_photo = sum(1 for e in entries if e.is_photo)
+            n_text  = len(entries) - n_photo
+            print(f"\n── Summary {'─' * 40}")
+            print(f"Total items: {len(entries)}")
+            print(f"  {'Community Text':<20s} {n_text:5d}")
+            print(f"  {'Community Photo':<20s} {n_photo:5d}")
+
+    else:
+        # ── National disc ─────────────────────────────────────────────────────
+        entries = extract_catalogue(data_dir)
+
+        if args.filter_type:
+            entries = [e for e in entries
+                       if args.filter_type.lower() in e.type_name.lower()]
+
+        if args.format == "text":
+            print(_format_text(entries))
+        elif args.format == "csv":
+            print(_format_csv(entries), end="")
+        elif args.format == "json":
+            print(_format_json(entries))
+
+        if args.format == "text":
+            type_counts: dict = {}
+            for e in entries:
+                type_counts[e.type_name] = type_counts.get(e.type_name, 0) + 1
+            print(f"\n── Summary {'─' * 40}")
+            print(f"Total datasets: {len(entries)}")
+            for t, c in sorted(type_counts.items()):
+                print(f"  {t:<20s} {c:5d}")
 
 
 if __name__ == "__main__":
