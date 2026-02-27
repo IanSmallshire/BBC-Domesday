@@ -181,24 +181,38 @@ Frame 2488
 
 | File | Format | Content |
 |---|---|---|
-| `frame_index_full.txt` | Text, one entry per frame 1–54000 | National disc only — see generation script below |
+| `frame_index_full.txt` | Text, one entry per frame 1–54000 | National disc |
+| `comm_n_frame_index_full.txt` | Text, one entry per frame 1–30244 | Community disc North (7,542 records) |
+| `comm_s_frame_index_full.txt` | Text, one entry per frame 1–30778 | Community disc South (13,860 records) |
 
-The `frame_index_full.txt` file was generated with:
+These files were generated with:
 
 ```python
 from pathlib import Path
 from domesday.frame_index import build_frame_index, _format_frame_text
 
+# National disc
 records = build_frame_index(Path("data/NationalA"))
 by_frame = {}
 for r in records:
     by_frame.setdefault(r.frame, []).append(r)
-
 lines = []
 for frame in range(1, 54001):
     lines.append(_format_frame_text(by_frame.get(frame, [])))
-
 Path("frame_index_full.txt").write_text("\n\n".join(lines), encoding="utf-8")
+
+# Community discs (CommN and CommS)
+for disc, out_path in [("data/CommN", "comm_n_frame_index_full.txt"),
+                       ("data/CommS", "comm_s_frame_index_full.txt")]:
+    records = build_frame_index(Path(disc))
+    by_frame = {}
+    for r in records:
+        by_frame.setdefault(r.frame, []).append(r)
+    max_frame = max(by_frame)
+    lines = []
+    for frame in range(1, max_frame + 1):
+        lines.append(_format_frame_text(by_frame.get(frame, [])))
+    Path(out_path).write_text("\n\n".join(lines), encoding="utf-8")
 ```
 
 ---
