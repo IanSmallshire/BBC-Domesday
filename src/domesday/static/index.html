@@ -972,7 +972,7 @@
             await openDetailModal(offset);
             if (p.pg != null) {
               const pgNum = parseInt(p.pg, 10);
-              if (!isNaN(pgNum)) goDetail(pgNum);
+              if (!isNaN(pgNum) && pgNum > 1) goDetail(pgNum - 1);
             }
             if (p.fig != null) {
               const figNum = parseInt(p.fig, 10);
@@ -1164,7 +1164,7 @@
     function goDetail(idx) {
       _detailIndex = Math.max(0, Math.min(_detailCount() - 1, idx));
       _renderDetailModal();
-      if (_currentDetailOffset != null) _pushHash({ dot: _currentDetailOffset, pg: _detailIndex || null });
+      if (_currentDetailOffset != null) _pushHash({ dot: _currentDetailOffset, pg: _detailIndex > 0 ? _detailIndex + 1 : null });
     }
 
     function stepDetail(dir) {
