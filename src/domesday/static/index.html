@@ -11,7 +11,7 @@
       --accent:        #00CCFF;
       --accent-yellow: #FFD700;
       --text:          #FFFFFF;
-      --dim:           #3D6A8A;
+      --dim:           #7AAFC8;
       --border:        rgba(0, 204, 255, 0.28);
       --btn-active:    #001840;
       --btn-hover:     #00CCFF;
@@ -162,35 +162,28 @@
     #compass-rose {
       width: 52px;
       height: 52px;
-      border-radius: 50%;
-      background: var(--panel);
-      border: 2px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--dim);
-      font-size: 0.6rem;
-      letter-spacing: 0.05em;
+      flex-shrink: 0;
       user-select: none;
     }
 
     .nav-btn {
-      background: var(--btn-active);
+      background: var(--accent);
       border: 1px solid var(--accent);
-      color: var(--text);
+      color: #000050;
       font-family: inherit;
       padding: 8px 10px;
       font-size: 0.75rem;
+      font-weight: bold;
       letter-spacing: 0.05em;
       cursor: pointer;
       text-transform: uppercase;
-      transition: background 0.15s, color 0.15s;
+      transition: background 0.15s, border-color 0.15s;
       border-radius: 3px;
       min-width: 64px;
       text-align: center;
     }
 
-    .nav-btn:hover:not(:disabled) { background: var(--btn-hover); color: #000030; }
+    .nav-btn:hover:not(:disabled) { background: var(--accent-yellow); border-color: var(--accent-yellow); }
 
     .nav-btn:disabled {
       background: var(--btn-disabled);
@@ -345,6 +338,11 @@
       min-width: 67rem;
       box-shadow: 0 0 24px rgba(0, 204, 255, 0.2);
     }
+    /* Narrower modal for plain essay content (no photo column) */
+    #detail-modal-inner.essay-mode {
+      width: min(90vw, 42rem);
+      min-width: min(90vw, 32rem);
+    }
     #detail-modal-header {
       display: flex; justify-content: space-between; align-items: center;
       font-size: 0.8rem; color: var(--accent);
@@ -413,6 +411,20 @@
       font-weight: bold;
     }
     .essay-fig-link:hover { color: #fff; }
+
+    /* ── Concatenated essay separators and sub-title headers ── */
+    hr.essay-page-sep {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0.6rem 0;
+    }
+    .essay-page-header {
+      font-size: 0.72rem;
+      color: var(--accent);
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.2rem;
+    }
   </style>
 </head>
 <body>
@@ -449,7 +461,28 @@
         <button class="nav-btn" id="btn-n" data-dir="forward" title="Move forward (↑)">▲ Forward</button>
         <div id="compass-middle">
           <button class="nav-btn" id="btn-w" data-dir="turn_left"  title="Turn left (←)">◄ Left</button>
-          <div id="compass-rose">N</div>
+          <div id="compass-rose"><svg viewBox="0 0 52 52" width="52" height="52" style="display:block">
+            <circle cx="26" cy="26" r="24" fill="#00003A" stroke="rgba(0,204,255,0.28)" stroke-width="1.5"/>
+            <!-- Cardinal ticks -->
+            <line x1="26" y1="2.5" x2="26" y2="9"   stroke="#7AAFC8" stroke-width="1.5"/><!-- N -->
+            <line x1="49.5" y1="26" x2="43" y2="26"  stroke="#7AAFC8" stroke-width="1.5"/><!-- E -->
+            <line x1="26" y1="49.5" x2="26" y2="43"  stroke="#7AAFC8" stroke-width="1.5"/><!-- S -->
+            <line x1="2.5" y1="26" x2="9" y2="26"    stroke="#7AAFC8" stroke-width="1.5"/><!-- W -->
+            <!-- Intercardinal ticks -->
+            <line x1="43.0" y1="9.0"  x2="38.5" y2="13.5" stroke="#3D6A8A" stroke-width="1"/><!-- NE -->
+            <line x1="43.0" y1="43.0" x2="38.5" y2="38.5" stroke="#3D6A8A" stroke-width="1"/><!-- SE -->
+            <line x1="9.0"  y1="43.0" x2="13.5" y2="38.5" stroke="#3D6A8A" stroke-width="1"/><!-- SW -->
+            <line x1="9.0"  y1="9.0"  x2="13.5" y2="13.5" stroke="#3D6A8A" stroke-width="1"/><!-- NW -->
+            <!-- N label -->
+            <text x="26" y="12" text-anchor="middle" dominant-baseline="middle"
+                  fill="#00CCFF" font-size="6" font-family="Courier New,monospace" font-weight="bold">N</text>
+            <!-- Rotating needle (points in the direction the viewer faces) -->
+            <g id="compass-needle" transform="rotate(0 26 26)">
+              <polygon points="26,14 29.5,26 22.5,26" fill="#00CCFF"/>
+              <polygon points="26,38 29.5,26 22.5,26" fill="#1a3a50"/>
+              <circle cx="26" cy="26" r="2.5" fill="#000050" stroke="#00CCFF" stroke-width="1"/>
+            </g>
+          </svg></div>
           <button class="nav-btn" id="btn-e" data-dir="turn_right" title="Turn right (→)">Right ►</button>
         </div>
         <button class="nav-btn" id="btn-s" data-dir="back" title="Move back (↓)">▼ Back</button>
@@ -598,11 +631,14 @@
       if (typeof node.dataset_offset === 'number') {
         currentDatasetOffset = node.dataset_offset;
       }
+      _pushHash();  // update shareable URL (no detail open)
 
       // Update info panel
       infoView.textContent    = node.view;
       infoFrame.textContent   = node.frame;
-      infoDataset.textContent = currentDatasetOffset === 0 ? 'Gallery' : `Walk @${currentDatasetOffset}`;
+      infoDataset.textContent = currentDatasetOffset === 0
+        ? 'Gallery'
+        : (_walkByOffset[currentDatasetOffset] ?? `Walk @${currentDatasetOffset}`);
       infoForward.textContent = node.forward !== null ? `view ${node.forward}` : 'dead end';
 
       // Load frame image
@@ -626,12 +662,21 @@
 
       // Plan image + position marker
       updatePlanMarker(node);
+      updateCompassRose(node);
 
       // Detail icon overlay
       updateDetailOverlay(node);
 
       // Update navigation buttons
       updateNavButtons(node);
+    }
+
+    // ── Compass rose ──────────────────────────────────────────────────────
+    function updateCompassRose(node) {
+      const needle = document.getElementById('compass-needle');
+      if (!needle || !node.plan) return;
+      const dir = ((8 - node.plan.base_direction + node.view) % 8 + 8) % 8;
+      needle.setAttribute('transform', `rotate(${dir * 45} 26 26)`);
     }
 
     // ── Plan position marker ──────────────────────────────────────────────
@@ -734,6 +779,7 @@
       // When the detail modal is open, arrow/Home/End keys navigate photos or text pages
       if (document.getElementById('detail-modal').style.display !== 'none'
           && _detailCount() > 0) {
+        if (_essayMode) return;  // essay is one scrollable block — let browser handle keys
         if (e.target.id === 'detail-num') return; // let the number input handle its own keys
         if (e.key === 'ArrowLeft')  { e.preventDefault(); stepDetail(-1); return; }
         if (e.key === 'ArrowRight') { e.preventDefault(); stepDetail(1);  return; }
@@ -867,6 +913,75 @@
     let _detailPageTitles = [];
     let _essayFigures = [];
     let _detailIndex = 0;
+    let _essayMode = false;   // true when showing concatenated essay (no pagination)
+    let _currentDetailOffset = null;  // item_offset of the currently open detail dot
+
+    // ── Walk name ↔ offset lookup maps (populated at boot) ───────────────────
+    let _walkByOffset = {};  // {6164: "brecon", 18450: "scot", ...}
+    let _walkByName   = {};  // {"brecon": 6164, "scot": 18450, ...}
+
+    // ── URL hash state ────────────────────────────────────────────────────────
+    function _parseHash() {
+      const params = {};
+      location.hash.replace(/^#/, '').split('&').forEach(part => {
+        const [k, v] = part.split('=');
+        if (k) params[k] = v !== undefined ? decodeURIComponent(v) : '';
+      });
+      return params;
+    }
+
+    // Replace current URL hash with the current navigation state.
+    // Pass extras = { dot, fig } to include an open detail or figure.
+    function _pushHash(extras = {}) {
+      if (currentView === null) return;
+      const parts = [`v=${currentView}`];
+      const walkName = _walkByOffset[currentDatasetOffset];
+      if (walkName) parts.unshift(`d=${walkName}`);
+      // gallery (offset 0, no entry in _walkByOffset) → d= omitted
+      if (extras.dot != null) parts.push(`dot=${extras.dot}`);
+      if (extras.fig != null) parts.push(`fig=${extras.fig}`);
+      history.replaceState(null, '', '#' + parts.join('&'));
+    }
+
+    // Restore navigation state from the URL hash.
+    // Returns true if a valid hash was found and applied.
+    async function _restoreFromHash() {
+      const p = _parseHash();
+      if (!p.v) return false;
+      const view = parseInt(p.v, 10);
+      if (isNaN(view)) return false;
+      let dataset = 0;
+      if (p.d) {
+        const byName = _walkByName[p.d];
+        if (byName !== undefined) {
+          dataset = byName;
+        } else {
+          // Backwards compat: accept raw numeric offset (old shared URLs)
+          const num = parseInt(p.d, 10);
+          if (!isNaN(num)) dataset = num;
+        }
+      }
+      currentDatasetOffset = dataset;
+      try {
+        const node = await apiGet(`/api/view/${view}?dataset=${currentDatasetOffset}`);
+        renderNode(node);
+        if (p.dot != null) {
+          const offset = parseInt(p.dot, 10);
+          if (!isNaN(offset)) {
+            await openDetailModal(offset);
+            if (p.fig != null) {
+              const figNum = parseInt(p.fig, 10);
+              if (!isNaN(figNum)) await openEssayFigure(figNum);
+            }
+          }
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    window.addEventListener('hashchange', () => { _restoreFromHash(); });
 
     async function openDetailModal(item_offset) {
       setStatus('Loading detail…');
@@ -881,12 +996,14 @@
         _detailPageTitles = data.page_titles || [];
         _essayFigures = data.figures || [];
         _detailIndex = 0;
+        _currentDetailOffset = item_offset;
         const TYPE_LABELS = {8:'Photo', 6:'Text', 7:'Text', 9:'Walk', 10:'Film'};
         const typeLabel = TYPE_LABELS[data.type] ?? 'Detail';
         document.getElementById('detail-modal-title').textContent =
           data.title ? `${typeLabel}: ${data.title}` : typeLabel;
         _renderDetailModal();
         document.getElementById('detail-modal').style.display = 'flex';
+        _pushHash({ dot: item_offset });
         setStatus('');
       } catch (err) {
         const msg = err.message.includes('503')
@@ -930,6 +1047,7 @@
         _detailIndex        = 0;
         document.getElementById('detail-modal-title').textContent = `Figure [${figNum}]`;
         _renderDetailModal();
+        _pushHash({ dot: _currentDetailOffset, fig: figNum });
         setStatus('');
       } catch (err) {
         setStatus(`Figure failed: ${err.message}`);
@@ -937,18 +1055,23 @@
     }
 
     function _renderDetailModal() {
+      const modalInner     = document.getElementById('detail-modal-inner');
       const photoRow       = document.getElementById('detail-photo-row');
       const frameContainer = document.getElementById('detail-frame-container');
       const infoPanel      = document.getElementById('detail-info-panel');
       const textContainer  = document.getElementById('detail-text-container');
-      const nav = document.getElementById('detail-nav');
+      const nav    = document.getElementById('detail-nav');
       const slider = document.getElementById('detail-slider');
       const captionEl = document.getElementById('detail-caption');
-      const descEl = document.getElementById('detail-description');
+      const descEl    = document.getElementById('detail-description');
 
-      const hasPhotos = _detailFrames.length > 0;
-      const hasText   = _detailPages.length  > 0;
+      const hasPhotos  = _detailFrames.length > 0;
+      const hasText    = _detailPages.length  > 0;
+      const essayOnly  = hasText && !hasPhotos;
       const n = hasPhotos ? _detailFrames.length : _detailPages.length;
+
+      _essayMode = essayOnly;
+      modalInner.classList.toggle('essay-mode', essayOnly);
 
       if (n === 0) {
         // Non-photo, non-text gallery item — show fallback message
@@ -959,13 +1082,38 @@
           '<div style="display:flex;align-items:center;justify-content:center;' +
           'height:100%;color:var(--dim);font-size:0.8rem;text-align:center;padding:1rem;">' +
           'No image available for this item type.</div>';
-        nav.style.display = 'none';
+        nav.style.display    = 'none';
         slider.style.display = 'none';
         captionEl.textContent = '';
-        descEl.style.display = 'none';
+        descEl.style.display  = 'none';
         return;
       }
 
+      if (essayOnly) {
+        // ── Concatenated scrollable essay ──────────────────────────────────
+        photoRow.style.display      = 'none';
+        infoPanel.style.display     = 'none';
+        textContainer.style.display = 'flex';
+        nav.style.display           = 'none';
+        slider.style.display        = 'none';
+
+        // Build one HTML block: optional sub-title header before each page,
+        // filtered to skip empty titles and bare page-number strings (e.g. "1").
+        const parts = _detailPages.map((page, idx) => {
+          const sub = (_detailPageTitles[idx + 1] || '').trim();
+          const showSub = sub && !/^\d+$/.test(sub);
+          const header = showSub
+            ? `<div class="essay-page-header">${_escapeHtml(sub)}</div>`
+            : '';
+          return header + _formatEssayText(page);
+        });
+        document.getElementById('detail-page-title').textContent = '';
+        document.getElementById('detail-text').innerHTML =
+          parts.join('<hr class="essay-page-sep">');
+        return;
+      }
+
+      // ── Photo / paginated text mode ────────────────────────────────────────
       photoRow.style.display      = hasPhotos ? 'flex' : 'none';
       infoPanel.style.display     = hasPhotos ? 'flex' : 'none';
       textContainer.style.display = hasText   ? 'flex' : 'none';
@@ -977,28 +1125,28 @@
 
       const i = _detailIndex;
 
-      nav.style.display = 'flex';
+      nav.style.display    = 'flex';
       slider.style.display = n > 1 ? 'block' : 'none';
 
       if (hasPhotos) {
         document.getElementById('detail-frame-img').src = `/frame/${_detailFrames[i]}`;
         captionEl.textContent = _detailCaptions[i] || '';
         const description = _detailDescriptions[i] || '';
-        descEl.textContent = description;
+        descEl.textContent   = description;
         descEl.style.display = description ? 'block' : 'none';
       } else {
         captionEl.textContent = '';
-        descEl.style.display = 'none';
+        descEl.style.display  = 'none';
         document.getElementById('detail-page-title').textContent = _detailPageTitles[i + 1] || '';
         document.getElementById('detail-text').innerHTML = _formatEssayText(_detailPages[i]);
       }
 
       // Sync number input, total label, and slider
       const numEl = document.getElementById('detail-num');
-      numEl.max = n;
+      numEl.max   = n;
       numEl.value = i + 1;
       document.getElementById('detail-total').textContent = n;
-      slider.max = n;
+      slider.max   = n;
       slider.value = i + 1;
 
       // Button states
@@ -1019,6 +1167,8 @@
 
     function closeDetailModal() {
       document.getElementById('detail-modal').style.display = 'none';
+      _currentDetailOffset = null;
+      _pushHash();
     }
 
     // ── Utilities ────────────────────────────────────────────────────────────
@@ -1036,6 +1186,20 @@
         if (typeof cfg.bbc_v_offset === 'number') BBC_V_OFFSET = cfg.bbc_v_offset;
         if (typeof cfg.bbc_v_scale  === 'number') BBC_V_SCALE  = cfg.bbc_v_scale;
       } catch (_) { /* use defaults */ }
+
+      // Build walk name ↔ offset lookup maps
+      try {
+        const walks = await apiGet('/api/walks');
+        walks.forEach(w => {
+          _walkByOffset[w.gallery_offset] = w.name.toLowerCase();
+          _walkByName[w.name.toLowerCase()] = w.gallery_offset;
+        });
+      } catch (_) { /* walk names unavailable; fall back to numeric offsets */ }
+
+      // Restore from shared URL hash if present; otherwise load initial view
+      const restored = await _restoreFromHash();
+      if (restored) return;
+
       setStatus('Loading initial view…');
       try {
         const node = await apiGet('/api/initial');
