@@ -939,6 +939,7 @@
       if (walkName) parts.unshift(`d=${walkName}`);
       // gallery (offset 0, no entry in _walkByOffset) → d= omitted
       if (extras.dot != null) parts.push(`dot=${extras.dot}`);
+      if (extras.pg  != null) parts.push(`pg=${extras.pg}`);
       if (extras.fig != null) parts.push(`fig=${extras.fig}`);
       history.replaceState(null, '', '#' + parts.join('&'));
     }
@@ -969,6 +970,10 @@
           const offset = parseInt(p.dot, 10);
           if (!isNaN(offset)) {
             await openDetailModal(offset);
+            if (p.pg != null) {
+              const pgNum = parseInt(p.pg, 10);
+              if (!isNaN(pgNum)) goDetail(pgNum);
+            }
             if (p.fig != null) {
               const figNum = parseInt(p.fig, 10);
               if (!isNaN(figNum)) await openEssayFigure(figNum);
@@ -1159,6 +1164,7 @@
     function goDetail(idx) {
       _detailIndex = Math.max(0, Math.min(_detailCount() - 1, idx));
       _renderDetailModal();
+      if (_currentDetailOffset != null) _pushHash({ dot: _currentDetailOffset, pg: _detailIndex || null });
     }
 
     function stepDetail(dir) {
