@@ -915,6 +915,7 @@
     let _detailIndex = 0;
     let _essayMode = false;   // true when showing concatenated essay (no pagination)
     let _currentDetailOffset = null;  // item_offset of the currently open detail dot
+    let _currentFigNum = null;        // figNum of the currently-open essay figure (null = plain detail)
 
     // ── Walk name ↔ offset lookup maps (populated at boot) ───────────────────
     let _walkByOffset = {};  // {6164: "brecon", 18450: "scot", ...}
@@ -1002,6 +1003,7 @@
         _essayFigures = data.figures || [];
         _detailIndex = 0;
         _currentDetailOffset = item_offset;
+        _currentFigNum = null;
         const TYPE_LABELS = {8:'Photo', 6:'Text', 7:'Text', 9:'Walk', 10:'Film'};
         const typeLabel = TYPE_LABELS[data.type] ?? 'Detail';
         document.getElementById('detail-modal-title').textContent =
@@ -1050,6 +1052,7 @@
         _detailPageTitles   = data.page_titles || [];
         _essayFigures       = data.figures || [];
         _detailIndex        = 0;
+        _currentFigNum      = figNum;
         document.getElementById('detail-modal-title').textContent = `Figure [${figNum}]`;
         _renderDetailModal();
         _pushHash({ dot: _currentDetailOffset, fig: figNum });
@@ -1164,7 +1167,7 @@
     function goDetail(idx) {
       _detailIndex = Math.max(0, Math.min(_detailCount() - 1, idx));
       _renderDetailModal();
-      if (_currentDetailOffset != null) _pushHash({ dot: _currentDetailOffset, pg: _detailIndex > 0 ? _detailIndex + 1 : null });
+      if (_currentDetailOffset != null) _pushHash({ dot: _currentDetailOffset, pg: _detailIndex > 0 ? _detailIndex + 1 : null, fig: _currentFigNum });
     }
 
     function stepDetail(dir) {
@@ -1174,6 +1177,7 @@
     function closeDetailModal() {
       document.getElementById('detail-modal').style.display = 'none';
       _currentDetailOffset = null;
+      _currentFigNum = null;
       _pushHash();
     }
 
