@@ -6,6 +6,155 @@ Both tools auto-detect the disc type from the data directory contents:
 
 ---
 
+## `domesday.export` — Walk/Gallery JSON Export
+
+Exports the main gallery dataset and all 9 embedded walk sub-datasets to
+individual JSON files, with optional full detail-dot metadata (titles, types,
+frame lists, page/figure counts).
+
+**Reads**: `VFS/GALLERY` (always) + optionally `VFS/NAMES`, `VFS/DATA1`,
+`VFS/DATA2` (needed for `--with-details`).
+
+```bash
+# Export gallery + all 9 walks (bare detail dot coords only)
+python -m domesday.export
+
+# Export with full detail metadata: titles, types, frames, page/figure counts
+python -m domesday.export --with-details
+
+# Walk sub-datasets only (skip the main gallery)
+python -m domesday.export --no-gallery
+
+# Custom paths (env vars also accepted: DOMESDAY_GALLERY, DOMESDAY_NAMES, etc.)
+python -m domesday.export \
+    --gallery data/NationalA/VFS/GALLERY \
+    --names   data/NationalA/VFS/NAMES \
+    --data1   data/NationalA/VFS/DATA1 \
+    --data2   data/NationalA/VFS/DATA2 \
+    --output  exports/walks
+```
+
+**Output** (one JSON file per dataset in `exports/walks/` by default):
+```
+exports/walks/gallery.json
+exports/walks/brecon.json
+exports/walks/scot.json
+exports/walks/urban.json
+exports/walks/farm.json
+exports/walks/flat.json
+exports/walks/stone.json
+exports/walks/stock.json
+exports/walks/terace.json
+exports/walks/show.json
+```
+
+### JSON structure
+
+Each file has a top-level envelope followed by a `nodes` map keyed by view number:
+
+```json
+{
+  "name": "gallery",
+  "gallery_offset": 0,
+  "gallery_view": null,
+  "initial_view": 1,
+  "base_view": 802,
+  "base_plan": 321,
+  "syslev": 1,
+  "node_count": 320,
+  "nodes": {
+    "1": {
+      "view": 1,
+      "frame": 803,
+      "forward": 26,
+      "linked_dataset": false,
+      "link_target": null,
+      "plan": { "x": 512, "y": 350, "plan_number": 0, "base_direction": 3 },
+      "plan_frame": 1124,
+      "details": [ ... ]
+    }
+  }
+}
+```
+
+### Detail dot shape (without `--with-details`)
+
+```json
+{ "x": 640, "y": 512, "item_offset": 24 }
+```
+
+### Detail dot shape (with `--with-details`)
+
+Gallery nodes (syslev=1) resolve each dot via the NAMES file:
+
+```json
+{
+  "x": 640, "y": 512, "item_offset": 24,
+  "title": "Hereford Cathedral",
+  "type": 8,
+  "type_name": "Photo",
+  "frame_count": 3,
+  "frames": [18200, 18201, 18202]
+}
+```
+
+| `type` | `type_name` | Extra fields |
+|--------|-------------|--------------|
+| 8 | `Photo` | `frames` (list), `frame_count` |
+| 6 or 7 | `Text` | `page_count`, `figure_count`, `figure_details` (list, when figures exist) |
+| 4 | `Chart` | _(none)_ |
+| 1–3 | `Map` | _(none)_ |
+| 9 | `Walk` | _(none)_ |
+
+Each entry in `figure_details` is a figure embedded in the essay (inline illustration on a specific page):
+
+```json
+{
+  "address": 136611840,
+  "page_num": 1,
+  "type": 8,
+  "type_name": "Photo",
+  "frames": [24152, 24153, ...],
+  "frame_count": 71
+}
+```
+
+`figure_details` entries have the same shape as detail dots (`type`, `type_name`, `frames`/`frame_count` for photos, `page_count`/`figure_count` for the rare essay-typed figures), plus:
+
+| Field | Description |
+|-------|-------------|
+| `address` | Raw 32-bit figure address from the essay binary |
+| `page_num` | Essay page number where this figure is referenced |
+
+`figure_details` is **one level deep** — entries never contain their own nested `figure_details`.
+
+Walk sub-dataset nodes (syslev≠1) resolve closeup frame chains:
+
+```json
+{
+  "x": 400, "y": 300, "item_offset": 12,
+  "title": "",
+  "type": -1,
+  "type_name": "closeup",
+  "frames": [45100, 45101],
+  "frame_count": 2
+}
+```
+
+### CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--gallery` | `data/NationalA/VFS/GALLERY` | GALLERY file path (`$DOMESDAY_GALLERY`) |
+| `--names` | `data/NationalA/VFS/NAMES` | NAMES file path (`$DOMESDAY_NAMES`) |
+| `--data1` | `data/NationalA/VFS/DATA1` | DATA1 path (`$DOMESDAY_DATA1`) |
+| `--data2` | `data/NationalA/VFS/DATA2` | DATA2 path (`$DOMESDAY_DATA2`) |
+| `--output` | `exports/walks` | Output directory |
+| `--with-details` | off | Resolve full detail metadata |
+| `--no-gallery` | off | Omit the main gallery; export walk sub-datasets only |
+
+---
+
 ## `domesday.catalogue` — Disc Catalogue
 
 Lists every content item on the disc with its type and disc address.

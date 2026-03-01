@@ -8,7 +8,7 @@ This documentation describes the binary file formats and data structures used by
 docs/
 ├── index.md                      ← This file
 ├── tools/
-│   └── cli-reference.md          ← CLI commands: catalogue, frame_index; disc compatibility notes
+│   └── cli-reference.md          ← CLI commands: export, catalogue, frame_index; disc compatibility notes
 ├── file-formats/
 │   ├── gallery.md                ← GALLERY file layout + embedded walk sub-datasets
 │   ├── names.md                  ← NAMES file: item title/type/address records (National)
