@@ -23,6 +23,8 @@ byte_offset  = (sector_number % 24) * 256
 
 Data can span frames. The `g.nm.inc.frame.ptr` primitive automatically reads the next frame when the byte pointer reaches 6,144.
 
+> **Implementation note**: `nm_reader.py` reads the ADF with `BYTES_PER_FRAME = 6144`. The sector address stored in the NAMES record is multiplied by `SECTOR_SIZE = 256` to get the ADF byte offset. This is equivalent to the BCPL formula above but uses the raw file rather than a disc I/O layer.
+
 ---
 
 ## Overall Structure
@@ -71,8 +73,10 @@ All fields are read sequentially; the pointer auto-advances through frames.
 | 58–97 | _(skip 40 bytes)_ | Title string (40 bytes; item name used instead) |
 | 98–137 | `primary_units_string` | 40 bytes: abbreviation char + 39-char units label |
 | 138–177 | `secondary_units_string` | 40 bytes: same layout |
-| 178–179 | `value_data_type` / `raster_data_type` | uint16; meaning depends on dataset type (see below) |
-| 180+ | Sub-dataset index | Starts here inline in the frame stream |
+| 148–149 | `raster_data_type` | uint16; controls fine-block encoding (see §4a) |
+| 150+ | Sub-dataset index | Starts here inline in the frame stream |
+
+> **Byte offset note**: `raster_data_type` is at byte **148** from the dataset header start (= `_SUB_DATASET_INDEX_OFFSET - 2`). Earlier documentation listed this as bytes 178–179, which was incorrect.
 
 > **Note on units strings**: The first byte of each units string is an abbreviation character that is replaced with a space by the loader. The resulting BCPL string is 40 bytes (length byte = 40, then 39 visible chars).
 
@@ -97,13 +101,31 @@ Immediately follows the dataset header in the frame stream. There are two indexe
 ```
 uint16  num_subsets          // count of entries (N)
 // Repeated N times:
-int16   key                  // sub-dataset key (e.g. year, date code)
+int16   key                  // spatial resolution in km (see note below)
 uint16  relative_record_no   // record offset from dataset base frame
 int16   word_offset          // position within that frame (×2 = byte offset)
 ```
 
 - **Entry size**: 6 bytes (3 × uint16/int16)
 - The `relative_record_no` is added to `g.nm.s!m.nm.dataset.record.number` to get the absolute frame number
+
+### Sub-dataset key = spatial resolution in km
+
+The `key` field is **not** a year or date code — it encodes the **spatial resolution of the sub-dataset in kilometres** (verified from `NN/display1.b` `choose.res()`):
+
+```bcpl
+// choose.res selects the sub-dataset whose resolution best fits the display viewport:
+g.nm.find.subset (m.nm.raster.data.type, pos, @key, @rec.num, @offset)
+num.squares := muldiv (width, height, key * key)   // key used as km divisor
+if g.nm.res.usable (key) then !res.ptr := key
+```
+
+The key is used directly as the grid cell size:
+- **Coarse block**: 32 × key km
+- **Fine block**: 8 × key km
+- **Grid square**: key × key km²
+
+Datasets on the National disc routinely have multiple sub-datasets at resolutions 1–10 km (e.g. Agricultural Workers has 10 sub-datasets keyed 1–10). The BCPL `choose.res()` function automatically selects the finest available resolution that produces a manageable number of grid squares for the requested viewport.
 
 ---
 
@@ -151,7 +173,7 @@ Used for `areal.mappable.data` datasets.
 
 ## 4. Value Data Types
 
-The `value_data_type` field (byte 178–179 of the dataset header) controls how values are interpreted:
+The `raster_data_type` field (byte 148–149 of the dataset header) controls how values are interpreted:
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -164,6 +186,33 @@ The `value_data_type` field (byte 178–179 of the dataset header) controls how 
 **Dual value types** (1 and 4) store two values per item: a ratio/percentage and its numerator. When loading, only the primary (ratio) value is used for display; the numerator is available for retrieval.
 
 Missing data is encoded as `0x8000` (`m.nm.uniform.missing`). Area index 0 is always set to missing.
+
+---
+
+## 4a. Dual-value Fine Block Encoding
+
+When `raster_data_type` is `1` (ratio+numerator) or `4` (percentage+numerator), the fine block item layout differs from standard RLE:
+
+| Byte | Field | Meaning |
+|------|-------|---------|
+| `[ptr+0]` | `relative_location` | 1-based grid cell (1–64) |
+| `[ptr+1]` | **display value** | The ratio or percentage (uint8, 0–255) |
+| `[ptr+2]` | numerator | Raw count (uint8) — ignored for display |
+
+**No RLE expansion**: each item fills exactly **one** cell at `relative_location`. The second byte is the actual display value, not a repeat count.
+
+This contrasts with normal types where the second byte is `repeat_count` and the third byte is `value`, causing `repeat_count` consecutive cells to be filled.
+
+From BCPL `nm.unpack.fine.block` (`unpack.b`):
+```
+test dual.type then
+    value at relative.location := repeat.count   // 2nd byte IS the display value
+else
+    value at relative.location := primary.value  // 3rd byte is the display value
+    duplicate for repeat.count cells             // normal RLE expansion
+```
+
+Datasets using dual-value encoding include Agricultural Workers (record_no=424) and all datasets with ratio or percentage values (employment rates, land-use percentages, etc.).
 
 ---
 

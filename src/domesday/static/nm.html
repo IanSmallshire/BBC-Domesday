@@ -56,6 +56,7 @@
     .nm-ds-badge { font-size: 0.6rem; color: var(--dim); padding: 0 3px;
                    border: 1px solid #334; border-radius: 2px; }
     .nm-ds-recno { font-size: 0.6rem; color: #446; }
+    .nm-ds-path  { font-size: 0.58rem; color: #446; font-style: italic; padding: 0 4px; }
 
     /* Right panel */
     #nm-render-panel { flex: 1; display: flex; flex-direction: column; padding: 8px;
@@ -98,21 +99,44 @@
                      transition: background 0.15s, color 0.15s; }
     #nm-render-btn:hover { background: var(--accent-yellow); color: #000030; }
     #nm-render-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    #nm-info-btn { background: transparent; border: 1px solid var(--border);
-                   color: var(--dim); font-family: inherit; font-size: 0.75rem;
-                   padding: 3px 10px; cursor: pointer; border-radius: 3px; }
-    #nm-info-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
-
     #nm-status { font-size: 0.7rem; color: var(--dim); min-height: 1em; }
-    #nm-img-container { overflow: auto; display: flex; justify-content: center; }
+
+    /* Rendered map + info text side-by-side */
+    #nm-img-row { display: flex; gap: 12px; align-items: stretch; min-width: 0; }
+    #nm-img-container { flex: 1; overflow: auto; display: flex; justify-content: center; min-width: 0; }
     #nm-img { image-rendering: pixelated; image-rendering: crisp-edges; max-width: 100%;
                border: 1px solid var(--border); }
 
-    details#nm-info-panel { margin-top: 4px; }
-    #nm-info-summary { cursor: pointer; color: var(--accent-cyan); font-size: 0.8rem; }
-    #nm-info-content { white-space: pre-wrap; font-size: 0.85em; max-height: 20em;
+    details#nm-info-panel { width: 40ch; flex-shrink: 0;
+                            display: flex; flex-direction: column; overflow: hidden; }
+    #nm-info-summary { cursor: pointer; color: var(--accent-cyan); font-size: 0.8rem; flex-shrink: 0; }
+    #nm-info-content { white-space: pre-wrap; font-size: 0.85em; flex: 1;
                        overflow-y: auto; padding: 6px; background: #111;
                        border: 1px solid #333; margin-top: 4px; }
+
+    /* Stats panel (sits inside #nm-controls-col) */
+    details#nm-stats-panel { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 4px; }
+    #nm-stats-summary { cursor: pointer; color: var(--accent-cyan); font-size: 0.8rem; }
+    #nm-stats-content { padding: 6px 4px; margin-top: 4px; }
+    .nm-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                     gap: 4px 12px; font-size: 0.72rem; margin-bottom: 8px; }
+    .nm-stat { display: flex; justify-content: space-between; gap: 6px; }
+    .nm-stat-label { color: var(--dim); }
+    .nm-stat-value { color: var(--text); font-variant-numeric: tabular-nums; }
+    .nm-stat-value.dual-tag { color: var(--accent-yellow); }
+    .nm-hist-wrap { margin-top: 6px; }
+    .nm-hist-label { font-size: 0.65rem; color: var(--dim); margin-bottom: 3px; }
+    .nm-hist { display: flex; align-items: flex-end; height: 54px; gap: 1px; }
+    .nm-hist-bar { flex: 1; background: var(--accent-cyan); opacity: 0.65; min-height: 1px;
+                   cursor: default; border-radius: 1px 1px 0 0; }
+    .nm-hist-bar:hover { opacity: 1; }
+    .nm-hist-axis { display: flex; justify-content: space-between;
+                    font-size: 0.6rem; color: var(--dim); margin-top: 1px; }
+    .nm-sub-tab { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+    .nm-sub-btn { font-size: 0.65rem; padding: 1px 6px; background: transparent;
+                  border: 1px solid var(--border); color: var(--dim); cursor: pointer;
+                  border-radius: 3px; font-family: inherit; }
+    .nm-sub-btn.active { border-color: var(--accent-cyan); color: var(--accent-cyan); }
   </style>
 </head>
 <body>
@@ -168,26 +192,32 @@
           </div>
 
           <div id="nm-render-controls">
-            <label>Colours: <select id="nm-mode">
+            <label>Colours: <select id="nm-mode" onchange="_nmPushUrlState()">
               <option value="bands">5-band BBC</option>
               <option value="distinct">Distinct (golden hues)</option>
               <option value="viridis">Viridis</option>
               <option value="greyscale">Greyscale</option>
             </select></label>
-            <label>Scale: <input type="number" id="nm-scale" value="1" min="1" max="8">&times;</label>
+            <label>Scale: <input type="number" id="nm-scale" value="1" min="1" max="8" oninput="_nmPushUrlState()">&times;</label>
             <label><input type="checkbox" id="nm-legend"> Legend</label>
             <button id="nm-render-btn" onclick="renderNmMap()">Render Map</button>
-            <button id="nm-info-btn" onclick="fetchNmInfo()" title="Show dataset description">Info</button>
           </div>
+
+          <details id="nm-stats-panel" style="display:none">
+            <summary id="nm-stats-summary">Dataset statistics</summary>
+            <div id="nm-stats-content"></div>
+          </details>
         </div>
       </div>
 
       <div id="nm-status"></div>
-      <div id="nm-img-container"><img id="nm-img" alt="NM grid map" style="display:none"></div>
-      <details id="nm-info-panel" style="display:none;margin-top:8px">
-        <summary id="nm-info-summary">Dataset info</summary>
-        <div id="nm-info-content"></div>
-      </details>
+      <div id="nm-img-row">
+        <div id="nm-img-container"><img id="nm-img" alt="NM grid map" style="display:none"></div>
+        <details id="nm-info-panel" style="display:none">
+          <summary id="nm-info-summary">Dataset info</summary>
+          <div id="nm-info-content"></div>
+        </details>
+      </div>
     </div>
   </div>
 
@@ -199,6 +229,10 @@
     let _nmSelectedRecord  = null;
     let _nmOpenPath        = [];   // array of segment strings → open path in accordion
     let _nmSearchTimer     = null;
+    let _nmDblClickTimer   = null;
+    let _nmNameCounts      = {};   // name → count, for duplicate disambiguation
+    let _nmStatsCache      = {};   // record_no → stats JSON (client-side mirror of server cache)
+    let _nmStatsSubIdx     = 0;    // currently displayed sub-dataset index in stats panel
 
     // ── Map calibration (GB main grid on frame 28995) ────────────────────────
     // Derived from pixel positions of axis tick marks in the 720×576 frame image.
@@ -250,6 +284,7 @@
       else if (changed === 'max')  { if (!isNaN(a) && !isNaN(b)) size.value = b - a; }
       else if (changed === 'size') { if (!isNaN(a) && !isNaN(s)) max.value  = a + s; }
       _nmDrawRect();
+      _nmPushUrlState();
     }
 
     function _nmSetRegion(eMin, eMax, nMin, nMax) {
@@ -260,6 +295,7 @@
       document.getElementById('nm-n-max').value  = nMax;
       document.getElementById('nm-n-size').value = nMax - nMin;
       _nmDrawRect();
+      _nmPushUrlState();
     }
 
     function nmPreset(key) {
@@ -524,15 +560,29 @@
         (isSelected ? ' selected' : '') +
         (e.item_type !== 1 ? ' type-other' : '');
       div.style.paddingLeft = (24 + depth * 10) + 'px';
+      const isDupe = (_nmNameCounts[e.name] || 0) > 1;
+      const pathHint = isDupe && e.path.length > 0
+        ? `<span class="nm-ds-path">${e.path[e.path.length - 1]}</span>`
+        : '';
       div.innerHTML =
         `<span class="nm-ds-name">${e.name}</span>` +
+        pathHint +
         `<span class="nm-ds-recno">#${e.record_no}</span>` +
         (e.item_type !== 1 ? `<span class="nm-ds-badge">T${e.item_type}</span>` : '');
       div.onclick = () => {
         _nmSelectedRecord = e;
         document.getElementById('nm-status').textContent = 'Selected: ' + e.name;
-        _nmRenderTree();
+        _nmPushUrlState();
+        fetchNmStats();
+        clearTimeout(_nmDblClickTimer);
+        _nmDblClickTimer = setTimeout(_nmRenderTree, 250);
       };
+      div.addEventListener('dblclick', () => {
+        clearTimeout(_nmDblClickTimer);
+        _nmSelectedRecord = e;
+        _nmRenderTree();
+        renderNmMap();
+      });
       return div;
     }
 
@@ -570,6 +620,8 @@
         if (_nmSelectedRecord)
           document.querySelector('#title-bar span').textContent =
             'BBC Domesday \u00b7 ' + _nmSelectedRecord.name;
+        _nmPushUrlState();
+        fetchNmInfo();
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
       } finally {
@@ -604,21 +656,189 @@
       }
     }
 
+    // ── Stats panel ──────────────────────────────────────────────────────────
+    async function fetchNmStats() {
+      if (!_nmSelectedRecord || _nmSelectedRecord.item_type !== 1) return;
+      const recNo   = _nmSelectedRecord.record_no;
+      const panel   = document.getElementById('nm-stats-panel');
+      const summary = document.getElementById('nm-stats-summary');
+      const content = document.getElementById('nm-stats-content');
+      panel.style.display = 'block';
+
+      if (_nmStatsCache[recNo]) {
+        _nmRenderStats(_nmStatsCache[recNo], content, summary);
+        return;
+      }
+
+      summary.textContent = 'Computing statistics\u2026';
+      content.innerHTML = '<span style="color:var(--dim);font-size:0.7rem">Scanning all grid blocks\u2014may take a few seconds\u2026</span>';
+      panel.open = true;
+
+      try {
+        const data = await apiGet(`/api/nm/stats/${recNo}`);
+        _nmStatsCache[recNo] = data;
+        _nmStatsSubIdx = 0;
+        _nmRenderStats(data, content, summary);
+      } catch (err) {
+        summary.textContent = 'Stats error';
+        content.innerHTML = `<span style="color:#f66;font-size:0.7rem">${err.message}</span>`;
+      }
+    }
+
+    function _nmRenderStats(data, content, summary) {
+      const subs = data.sub_datasets || [];
+      if (!subs.length) {
+        summary.textContent = 'Dataset statistics (no data)';
+        content.innerHTML = '<span style="color:var(--dim);font-size:0.7rem">No sub-datasets found.</span>';
+        return;
+      }
+      const idx = Math.min(_nmStatsSubIdx, subs.length - 1);
+      const s   = subs[idx];
+      const dualLabel = data.dual_type
+        ? (data.raster_data_type === 1 ? 'ratio+numerator' : 'percentage+numerator')
+        : null;
+
+      summary.textContent = 'Dataset statistics';
+
+      // Sub-dataset tabs (one per resolution)
+      const tabsHtml = subs.length > 1
+        ? `<div class="nm-sub-tab">${subs.map((sub, i) =>
+            `<button class="nm-sub-btn${i === idx ? ' active' : ''}"
+              onclick="_nmStatsSubIdx=${i};_nmRenderStats(_nmStatsCache[${data.record_no}],
+              document.getElementById('nm-stats-content'),
+              document.getElementById('nm-stats-summary'))"
+            >${sub.resolution_km} km</button>`).join('')}</div>`
+        : '';
+
+      // Stat rows
+      const bb = s.bounding_box_km;
+      const fmt = v => v == null ? '–' : (Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2));
+      const rows = [
+        ['Resolution',  `${s.resolution_km} km`],
+        ['Bounding box', `E ${bb.e_min}–${bb.e_max}  N ${bb.n_min}–${bb.n_max} km`],
+        ['Coverage',    `${s.coverage_pct.toFixed(1)}%  (${s.non_missing_count.toLocaleString()} / ${s.total_cells.toLocaleString()} cells)`],
+        ['Min',   fmt(s.min)],
+        ['Max',   fmt(s.max)],
+        ['Mean',  fmt(s.mean)],
+        ['Median (p50)', fmt(s.median)],
+        ['p25 / p75',   s.p25 != null ? `${fmt(s.p25)} / ${fmt(s.p75)}` : '–'],
+        ['p90',   fmt(s.p90)],
+        ['Std dev', fmt(s.std_dev)],
+      ];
+      if (dualLabel) rows.unshift(['Value type', dualLabel]);
+      if (s.cut_points && s.cut_points.length)
+        rows.push(['Cut-points', s.cut_points.map(fmt).join(', ')]);
+
+      const statsGrid = `<div class="nm-stats-grid">${rows.map(([label, val]) =>
+        `<div class="nm-stat"><span class="nm-stat-label">${label}</span>
+         <span class="nm-stat-value${label === 'Value type' ? ' dual-tag' : ''}">${val}</span></div>`
+      ).join('')}</div>`;
+
+      // Histogram
+      let histHtml = '';
+      const hist = s.histogram || [];
+      if (hist.length > 0) {
+        const maxCount = Math.max(...hist.map(b => b.count), 1);
+        const bars = hist.map(b => {
+          const pct = Math.max(1, Math.round(100 * b.count / maxCount));
+          return `<div class="nm-hist-bar" style="height:${pct}%"
+            title="${fmt(b.lo)}–${fmt(b.hi)}: ${b.count.toLocaleString()}"></div>`;
+        }).join('');
+        histHtml = `<div class="nm-hist-wrap">
+          <div class="nm-hist-label">Value distribution (${hist.length} bins)</div>
+          <div class="nm-hist">${bars}</div>
+          <div class="nm-hist-axis"><span>${fmt(s.min)}</span><span>${fmt(s.max)}</span></div>
+        </div>`;
+      }
+
+      content.innerHTML = tabsHtml + statsGrid + histHtml;
+    }
+
+    // ── URL state ─────────────────────────────────────────────────────────────
+    function _nmPushUrlState() {
+      const eMin = document.getElementById('nm-e-min').value;
+      const eMax = document.getElementById('nm-e-max').value;
+      const nMin = document.getElementById('nm-n-min').value;
+      const nMax = document.getElementById('nm-n-max').value;
+      const mode  = document.getElementById('nm-mode').value;
+      const scale = document.getElementById('nm-scale').value;
+      const base  = '/domesday-navigator/NationalA/GridMap';
+      let url = base;
+      if (eMin !== '' && eMax !== '' && nMin !== '' && nMax !== '') {
+        url += `/Region/${eMin},${nMin},${eMax},${nMax}`;
+      }
+      if (_nmSelectedRecord) {
+        url += `/dataset/${_nmSelectedRecord.record_no}/${mode}/${scale}`;
+      }
+      history.replaceState(null, '', url);
+    }
+
+    function _nmParseUrlState() {
+      const base = '/domesday-navigator/NationalA/GridMap';
+      const rest = window.location.pathname.slice(base.length);
+      const result = { eMin: null, nMin: null, eMax: null, nMax: null,
+                       recordNo: null, mode: 'bands', scale: 1 };
+      const regionM = rest.match(/\/Region\/(-?\d+),(-?\d+),(-?\d+),(-?\d+)/);
+      if (regionM) {
+        result.eMin = +regionM[1]; result.nMin = +regionM[2];
+        result.eMax = +regionM[3]; result.nMax = +regionM[4];
+      }
+      const datasetM = rest.match(/\/dataset\/(\d+)\/(\w+)\/(\d+)/);
+      if (datasetM) {
+        result.recordNo = +datasetM[1];
+        result.mode     = datasetM[2];
+        result.scale    = +datasetM[3];
+      }
+      return result;
+    }
+
     // ── Boot ─────────────────────────────────────────────────────────────────
     (async () => {
+      const urlState = _nmParseUrlState();
+
+      // Apply bbox from URL, or default to GB
+      if (urlState.eMin !== null) {
+        _nmSetRegion(urlState.eMin, urlState.eMax, urlState.nMin, urlState.nMax);
+      } else {
+        _nmSetRegion(NM_PRESETS.gb.e_min, NM_PRESETS.gb.e_max,
+                     NM_PRESETS.gb.n_min, NM_PRESETS.gb.n_max);
+      }
+
+      // Apply mode/scale from URL
+      if (urlState.mode)  document.getElementById('nm-mode').value  = urlState.mode;
+      if (urlState.scale) document.getElementById('nm-scale').value = urlState.scale;
+
+      // If map image already loaded (cached)
+      const mapImg = document.getElementById('nm-map-img');
+      if (mapImg.complete && mapImg.naturalWidth) _nmMapLoaded();
+
       try {
         _nmCat = await apiGet('/api/nm/catalogue');
+        for (const e of _nmCat) { _nmNameCounts[e.name] = (_nmNameCounts[e.name] || 0) + 1; }
         _nmTreeRoot = _nmBuildTree(_nmCat);
+
+        // Restore selected record from URL
+        if (urlState.recordNo) {
+          const entry = _nmCat.find(e => e.record_no === urlState.recordNo);
+          if (entry) {
+            _nmSelectedRecord = entry;
+            _nmOpenPath = entry.path.slice();
+          }
+        }
+
         _nmRenderTree();
         document.getElementById('nm-status').textContent = _nmCat.length + ' NM datasets loaded';
+
+        // Auto-render and auto-stats if URL had full state
+        if (urlState.recordNo) {
+          fetchNmStats();
+          if (urlState.eMin !== null) renderNmMap();
+        }
       } catch (err) {
         document.getElementById('nm-tree').innerHTML =
           '<em style="color:red;font-size:0.7rem">Failed to load catalogue</em>';
         document.getElementById('nm-status').textContent = 'Error: ' + err.message;
       }
-      // If map image already loaded (cached)
-      const img = document.getElementById('nm-map-img');
-      if (img.complete && img.naturalWidth) _nmMapLoaded();
     })();
   </script>
 </body>

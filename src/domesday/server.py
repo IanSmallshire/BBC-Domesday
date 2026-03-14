@@ -15,13 +15,15 @@ Endpoints:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import io
 import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from domesday.models import Node, WalkDataset
 from domesday.parser import (
@@ -30,10 +32,17 @@ from domesday.parser import (
     probe_data_type, rightof,
 )
 from domesday.export import discover_walks
+from domesday.catalogue import extract_catalogue
+from domesday.nm_reader import (
+    compute_nm_stats, grid_to_png, parse_nm_classification,
+    read_nm_text_addresses, render_nm_region,
+)
 
 # ---------------------------------------------------------------------------
 # Application state
 # ---------------------------------------------------------------------------
+
+_nm_stats_cache: dict[tuple, dict] = {}
 
 _app_state: dict[str, Any] = {
     "gallery": None,
@@ -42,6 +51,7 @@ _app_state: dict[str, Any] = {
     "data1_path": None,
     "data2_path": None,
     "names_path": None,     # Path to national NAMES file
+    "adf_path": None,       # Path to nationalA.adf disc image (for NM rendering)
     "bbc_h_offset":  8.65,  # % from JPEG left where BBC x=0 appears (PAL timing)
     "bbc_h_scale":  76.9,   # % of JPEG width covered by BBC x range (0-1279)
     "bbc_v_offset":  5.56,  # % from JPEG top where BBC y=1023 appears (PAL timing)
@@ -126,10 +136,9 @@ def _resolve_node(dataset: WalkDataset, view: int) -> Node:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def root():
-    index = _STATIC_DIR / "index.html"
-    return HTMLResponse(content=index.read_text(), status_code=200)
+    return RedirectResponse("/domesday-navigator/NationalA/walk/Gallery/view/1/")
 
 
 @app.get("/api/config")
@@ -269,6 +278,18 @@ def _load_linked(node: Node) -> WalkDataset | None:
 
 @app.get("/frame/{frame_number}")
 async def get_frame(frame_number: int):
+    jpgimg: Path | None = _app_state["jpgimg"]
+    if jpgimg is None:
+        raise HTTPException(status_code=503, detail="jpgimg path not configured")
+    ds = _get_dataset()
+    frame_path = ds.get_frame_path(frame_number, jpgimg)
+    if not frame_path.exists():
+        raise HTTPException(status_code=404, detail=f"Frame {frame_number} not found at {frame_path}")
+    return FileResponse(str(frame_path), media_type="image/jpeg")
+
+
+@app.get("/domesday-navigator/NationalA/frame/{bucket}/{frame_number}/frame.jpg")
+async def get_frame_v2(bucket: str, frame_number: int):
     jpgimg: Path | None = _app_state["jpgimg"]
     if jpgimg is None:
         raise HTTPException(status_code=503, detail="jpgimg path not configured")
@@ -481,6 +502,19 @@ async def get_plan_nodes(dataset: int = 0, plan_number: int = 0):
     })
 
 
+@app.get("/domesday-navigator/NationalA/GridMap")
+@app.get("/domesday-navigator/NationalA/GridMap/{path:path}")
+async def nm_page(path: str = ""):
+    return FileResponse(str(_STATIC_DIR / "nm.html"))
+
+
+@app.get("/domesday-navigator/{path:path}")
+async def spa_catchall(path: str):
+    if path.endswith("/frame.jpg"):
+        raise HTTPException(status_code=404, detail="Frame not found")
+    return FileResponse(str(_STATIC_DIR / "index.html"))
+
+
 @app.get("/api/dataset")
 async def get_dataset():
     ds = _get_dataset()
@@ -496,6 +530,167 @@ async def get_dataset():
             "nodes": nodes_json,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# NM map endpoints
+# ---------------------------------------------------------------------------
+
+
+def _get_data_dir() -> Path:
+    """Derive the NationalA data directory from gallery_path."""
+    gallery_path: Path | None = _app_state.get("gallery_path")
+    if gallery_path is None:
+        raise HTTPException(status_code=503, detail="Gallery path not configured")
+    # gallery_path = .../NationalA/VFS/GALLERY  →  parent.parent = .../NationalA
+    return gallery_path.parent.parent
+
+
+@app.get("/api/nm/catalogue")
+async def nm_catalogue():
+    """List NM datasets (types 1, 2, 3) from the NAMES/HIERARCHY catalogue."""
+    data_dir = _get_data_dir()
+    entries = extract_catalogue(data_dir)
+    nm = [e for e in entries if e.item_type in (1, 2, 3)]
+    return JSONResponse([{
+        "record_no": e.record_no,
+        "name": e.name,
+        "item_type": e.item_type,
+        "type_name": e.type_name,
+        "address": e.address,
+        "path": e.path,
+    } for e in nm])
+
+
+@app.get("/api/nm/render.png")
+async def nm_render(
+    record_no: int,
+    e_min: int,
+    n_min: int,
+    e_max: int,
+    n_max: int,
+    mode: str = "bands",
+    scale: int = 1,
+    legend: bool = False,
+):
+    """Render an NM grid-map dataset as a PNG for the given OS grid bbox (km).
+
+    mode:   "bands" (5-band BBC choropleth) or "distinct" (one colour per value)
+    scale:  pixel multiplier 1–8 (each 1 km² rendered as scale×scale pixels)
+    legend: if true, append a colour-key strip to the right of the image
+    """
+    adf_path: Path | None = _app_state.get("adf_path")
+    if adf_path is None:
+        raise HTTPException(status_code=503, detail="ADF not configured (use --adf)")
+    names_path: Path | None = _app_state.get("names_path")
+    if names_path is None:
+        raise HTTPException(status_code=503, detail="NAMES file not configured")
+    VALID_MODES = ("bands", "distinct", "viridis", "greyscale")
+    if mode not in VALID_MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {VALID_MODES}")
+    rec = parse_names_record(names_path.read_bytes(), record_no)
+    sector_addr = rec["address"]
+
+    # Look up title and hierarchy path from the catalogue
+    dataset_title = rec.get("title", "")
+    dataset_path: list[str] = []
+    try:
+        data_dir = _get_data_dir()
+        entries = extract_catalogue(data_dir)
+        cat_entry = next((e for e in entries if e.record_no == record_no), None)
+        if cat_entry:
+            dataset_title = cat_entry.name
+            dataset_path = list(cat_entry.path)
+    except Exception:
+        pass
+
+    try:
+        grid, meta = render_nm_region(adf_path, sector_addr, e_min, n_min, e_max, n_max)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Auto-fetch classification labels for distinct/viridis/greyscale legend
+    classification: dict[int, str] | None = None
+    if legend and mode in ("distinct", "viridis", "greyscale"):
+        try:
+            data1_path = _app_state.get("data1_path")
+            data2_path = _app_state.get("data2_path")
+            addrs = read_nm_text_addresses(adf_path, sector_addr)
+            desc_addr = addrs["descriptive"]
+            if desc_addr not in (0, 0xFFFFFFFF) and (data1_path or data2_path):
+                is_data2, file_offset = decode_names_address(desc_addr)
+                data_path = data2_path if is_data2 else data1_path
+                if data_path:
+                    essay = parse_essay(data_path, file_offset)
+                    classification = parse_nm_classification(essay["pages"])
+        except Exception:
+            pass
+
+    info_seg = f"#{record_no}  ·  E:{e_min}–{e_max} km  N:{n_min}–{n_max} km"
+    png_bytes = grid_to_png(
+        grid, meta,
+        mode=mode, scale=scale, legend=legend,
+        title=dataset_title, path=list(dataset_path),
+        info=info_seg,
+        classification=classification,
+    )
+    return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+
+
+@app.get("/api/nm/text")
+async def nm_text(record_no: int):
+    """Return the descriptive text and value classification for an NM dataset."""
+    adf_path: Path | None = _app_state.get("adf_path")
+    names_path: Path | None = _app_state.get("names_path")
+    if adf_path is None or names_path is None:
+        raise HTTPException(status_code=503, detail="ADF/NAMES not configured")
+    rec = parse_names_record(names_path.read_bytes(), record_no)
+    addrs = read_nm_text_addresses(adf_path, rec["address"])
+    desc_addr = addrs["descriptive"]
+    if desc_addr in (0, 0xFFFFFFFF):
+        return JSONResponse({"pages": [], "classification": {}})
+    is_data2, file_offset = decode_names_address(desc_addr)
+    data_path = _app_state.get("data2_path" if is_data2 else "data1_path")
+    if data_path is None:
+        raise HTTPException(status_code=503, detail="DATA1/DATA2 not configured")
+    essay = parse_essay(data_path, file_offset)
+    classification = parse_nm_classification(essay["pages"])
+    return JSONResponse({
+        "title": essay["titles"][0] if essay["titles"] else "",
+        "pages": essay["pages"],
+        "classification": {str(k): v for k, v in sorted(classification.items())},
+    })
+
+
+@app.get("/api/nm/stats/{record_no}")
+async def nm_stats(record_no: int):
+    """Compute and cache full-dataset statistics for an NM grid-mappable dataset.
+
+    First call scans the entire ADF (may take several seconds for large datasets).
+    Subsequent calls return the cached result instantly.
+    """
+    adf_path: Path | None = _app_state.get("adf_path")
+    names_path: Path | None = _app_state.get("names_path")
+    if adf_path is None or names_path is None:
+        raise HTTPException(status_code=503, detail="ADF/NAMES not configured")
+
+    cache_key = (str(adf_path), record_no)
+    if cache_key in _nm_stats_cache:
+        return JSONResponse(_nm_stats_cache[cache_key])
+
+    rec = parse_names_record(names_path.read_bytes(), record_no)
+    sector_addr = rec["address"]
+
+    try:
+        stats = await asyncio.get_event_loop().run_in_executor(
+            None, compute_nm_stats, adf_path, sector_addr
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    result = {"record_no": record_no, **stats}
+    _nm_stats_cache[cache_key] = result
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +729,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(os.environ.get('DOMESDAY_NAMES', 'data/NationalA/VFS/NAMES')),
         help='Path to national NAMES file for gallery item lookup',
+    )
+    p.add_argument(
+        '--adf',
+        type=Path,
+        default=Path(os.environ.get('DOMESDAY_ADF', 'data/nationalA.adf')),
+        help='Path to ADF disc image for NM map rendering (default: data/nationalA.adf)',
     )
     p.add_argument(
         "--bbc-h-offset",
@@ -589,6 +790,12 @@ def main() -> None:
     else:
         _app_state["names_path"] = None
         print(f"  Warning: NAMES file not found at {args.names} — gallery detail lookup disabled")
+    if args.adf.exists():
+        _app_state["adf_path"] = args.adf
+        print(f"  ADF file: {args.adf}")
+    else:
+        _app_state["adf_path"] = None
+        print(f"  Warning: ADF file not found at {args.adf} — NM map rendering disabled")
     _app_state["bbc_h_offset"] = args.bbc_h_offset
     _app_state["bbc_h_scale"]  = args.bbc_h_scale
     _app_state["bbc_v_offset"] = args.bbc_v_offset

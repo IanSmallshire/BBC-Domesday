@@ -158,12 +158,14 @@ def parse_dataset_header(adf_file: BinaryIO, sector_addr: int) -> dict:
     frame = read_frame(adf_file, frame_no)
 
     dataset_type = frame[frame_off + 1]
+    raster_data_type = u16(frame, frame_off + 148)
 
     return {
         "dataset_type": dataset_type,
         "dataset_frame": frame_no,
         "frame_off": frame_off,
         "index_offset": frame_off + _SUB_DATASET_INDEX_OFFSET,
+        "raster_data_type": raster_data_type,
     }
 
 
@@ -462,6 +464,9 @@ def render_nm_region(
                 "only type 1 datasets can be rendered as PNG maps"
             )
 
+        _DUAL_TYPES = (1, 4)   # ratio+numerator, percentage+numerator
+        dual_type = hdr.get("raster_data_type", 0) in _DUAL_TYPES
+
         # ── Step 2: sub-dataset index ───────────────────────────────────────
         subs = parse_sub_dataset_index(f, dataset_frame, index_offset)
         if not subs:
@@ -588,8 +593,15 @@ def render_nm_region(
                 for loc, count, val in items:
                     if loc < 1:
                         continue
-                    for c in range(count):
-                        loc2 = loc + c
+                    if dual_type:
+                        # count byte IS the display value (ratio/percentage); no RLE expansion
+                        display_val = count
+                        if display_val == 0:
+                            continue
+                        iterations = [(loc, display_val)]
+                    else:
+                        iterations = [(loc + c, val) for c in range(count) if loc + c <= 64]
+                    for loc2, display_val in iterations:
                         if loc2 > 64:
                             break
                         n_idx = (loc2 - 1) // 8   # 0-7 S→N within fine block
@@ -601,10 +613,11 @@ def render_nm_region(
                         c0 = max(0, e_km - e_min_km)
                         c1 = min(width, e_km - e_min_km + resolution_km)
                         if r0 < r1 and c0 < c1:
-                            grid[r0:r1, c0:c1] = val
+                            grid[r0:r1, c0:c1] = display_val
 
     metadata = {
         "dataset_type": hdr["dataset_type"],
+        "raster_data_type": hdr.get("raster_data_type", 0),
         "cut_points": cut_points,
         "data_size": data_size,
         "gr_start_e": rsd["gr_start_e"],
@@ -616,6 +629,181 @@ def render_nm_region(
         "resolution_km": resolution_km,
     }
     return grid, metadata
+
+
+# ---------------------------------------------------------------------------
+# Dataset statistics (full-scan)
+# ---------------------------------------------------------------------------
+
+_DUAL_TYPES_SET = frozenset((1, 4))
+
+
+def _compute_histogram(arr: "np.ndarray", bins: int = 20) -> list[dict]:
+    """Equal-width histogram over a non-empty float64 array."""
+    vmin, vmax = float(arr.min()), float(arr.max())
+    if vmin == vmax:
+        return [{"lo": vmin, "hi": vmax, "count": int(len(arr))}]
+    counts, edges = np.histogram(arr, bins=bins)
+    return [
+        {"lo": round(float(edges[i]), 2),
+         "hi": round(float(edges[i + 1]), 2),
+         "count": int(counts[i])}
+        for i in range(len(counts))
+    ]
+
+
+def compute_nm_stats(adf_path: Path, sector_addr: int) -> dict:
+    """Full-disc scan of an NM grid-mappable dataset; compute per-sub-dataset statistics.
+
+    Returns dict with keys:
+      raster_data_type, dual_type, sub_datasets (list).
+    Each sub-dataset entry has:
+      key, resolution_km, bounding_box_km, total_cells, non_missing_count,
+      coverage_pct, cut_points, data_size,
+      min, max, mean, median, p25, p75, p90, std_dev, histogram.
+    """
+    frame_cache: dict[int, bytes] = {}
+    with open(adf_path, "rb") as f:
+
+        def cached_frame(fn: int) -> bytes:
+            if fn not in frame_cache:
+                frame_cache[fn] = read_frame(f, fn)
+            return frame_cache[fn]
+
+        hdr = parse_dataset_header(f, sector_addr)
+        dataset_frame    = hdr["dataset_frame"]
+        raster_data_type = hdr.get("raster_data_type", 0)
+        dual_type        = raster_data_type in _DUAL_TYPES_SET
+
+        if hdr["dataset_type"] != 1:
+            raise ValueError("Only grid-mappable (type 1) datasets support stats")
+
+        subs = parse_sub_dataset_index(f, dataset_frame, hdr["index_offset"])
+        if not subs:
+            raise ValueError("No sub-datasets found")
+
+        sub_stats = []
+        for sub in subs:
+            resolution_km = max(1, sub["key"])
+            rsd = parse_raster_sub_dataset_header(
+                f, dataset_frame, sub["sub_frame"], sub["sub_byte_offset"]
+            )
+            data_base_frame  = rsd["data_base_frame"]
+            data_byte_offset = rsd["data_byte_offset"]
+            gr_start_e_km    = rsd["gr_start_e"] // 10
+            gr_start_n_km    = rsd["gr_start_n"] // 10
+            gr_end_e_km      = rsd["gr_end_e"] // 10
+            gr_end_n_km      = rsd["gr_end_n"] // 10
+            data_size        = rsd["data_size"]
+            cut_points       = rsd["cut_points"]
+
+            coarse_frame = cached_frame(data_base_frame)
+            dbo          = data_byte_offset
+            num_we       = u16(coarse_frame, dbo)
+            num_sn       = u16(coarse_frame, dbo + 2)
+            if num_we <= 0 or num_sn <= 0:
+                continue
+
+            total_cells = num_we * num_sn * 32 * 32
+            values: list[int] = []
+
+            for ci in range(num_we * num_sn):
+                we  = ci % num_we
+                off = dbo + 4 + ci * 4
+                coarse_rec = get_record_number(coarse_frame, off)
+                coarse_ofs = get_record_number(coarse_frame, off + 2)
+
+                if coarse_rec == 0 and coarse_ofs == 0:
+                    continue
+                if coarse_rec == UNIFORM_MISSING:
+                    continue
+
+                # Uniform coarse block — entire 32×32 area has one value
+                if coarse_rec <= 0:
+                    val = (-coarse_rec) if coarse_rec < 0 else coarse_ofs
+                    if 0 < val < UNIFORM_MISSING:
+                        values.extend([val] * (32 * 32))
+                    continue
+
+                fi_frame_no = data_base_frame + coarse_rec - 1
+                fi_offset   = (coarse_ofs - 1) * 2
+                fi_data     = read_cross_frame(cached_frame, fi_frame_no, fi_offset, 64)
+
+                for k in range(16):
+                    off_k    = k * 4
+                    fine_rec = get_record_number(fi_data, off_k)
+                    fine_ofs = get_record_number(fi_data, off_k + 2)
+
+                    if fine_rec == 0 and fine_ofs == 0:
+                        continue
+                    if fine_rec == UNIFORM_MISSING:
+                        continue
+
+                    # Uniform fine block — entire 8×8 area has one value
+                    if fine_rec <= 0:
+                        val = (-fine_rec) if fine_rec < 0 else fine_ofs
+                        if 0 < val < UNIFORM_MISSING:
+                            values.extend([val] * (8 * 8))
+                        continue
+
+                    fb_frame_no = data_base_frame + fine_rec - 1
+                    fb_offset   = (fine_ofs - 1) * 2
+                    fb_data     = read_cross_frame(cached_frame, fb_frame_no, fb_offset, 256)
+                    items       = decode_fine_block(fb_data, 0, data_size)
+
+                    for loc, count, val in items:
+                        if loc < 1:
+                            continue
+                        if dual_type:
+                            display_val = count   # 2nd byte IS the display value
+                            if 0 < display_val < UNIFORM_MISSING:
+                                values.append(display_val)
+                        else:
+                            for c in range(count):
+                                if loc + c > 64:
+                                    break
+                                if 0 < val < UNIFORM_MISSING:
+                                    values.append(val)
+
+            entry: dict = {
+                "key":           sub["key"],
+                "resolution_km": resolution_km,
+                "bounding_box_km": {
+                    "e_min": gr_start_e_km, "e_max": gr_end_e_km,
+                    "n_min": gr_start_n_km, "n_max": gr_end_n_km,
+                },
+                "total_cells":       total_cells,
+                "non_missing_count": len(values),
+                "coverage_pct": round(100.0 * len(values) / total_cells, 2) if total_cells else 0.0,
+                "cut_points": cut_points,
+                "data_size":  data_size,
+            }
+            if values:
+                arr = np.array(values, dtype=np.float64)
+                entry.update({
+                    "min":     int(arr.min()),
+                    "max":     int(arr.max()),
+                    "mean":    round(float(arr.mean()), 2),
+                    "median":  round(float(np.median(arr)), 2),
+                    "p25":     round(float(np.percentile(arr, 25)), 2),
+                    "p75":     round(float(np.percentile(arr, 75)), 2),
+                    "p90":     round(float(np.percentile(arr, 90)), 2),
+                    "std_dev": round(float(arr.std()), 2),
+                    "histogram": _compute_histogram(arr),
+                })
+            else:
+                entry.update({
+                    "min": None, "max": None, "mean": None, "median": None,
+                    "p25": None, "p75": None, "p90": None, "std_dev": None,
+                    "histogram": [],
+                })
+            sub_stats.append(entry)
+
+    return {
+        "raster_data_type": raster_data_type,
+        "dual_type":        dual_type,
+        "sub_datasets":     sub_stats,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -866,15 +1054,16 @@ def _make_gradient_legend(
 # Title header builder
 # ---------------------------------------------------------------------------
 
-def _make_header(title: str, path: list[str], width: int) -> Image.Image:
+def _make_header(title: str, path: list[str], width: int, info: str = "") -> Image.Image:
     """Build a BBC-style title bar above the map.
 
-    Top row: dataset title in bright yellow.
+    Top row: dataset title in bright yellow (left); info string in dim cyan (right).
     Bottom row: hierarchy breadcrumb in cyan.
     """
     pad = 6
     title_font = _load_font(14)
     path_font  = _load_font(11)
+    info_font  = _load_font(11)
 
     dummy = Image.new("RGBA", (1, 1))
     dd = ImageDraw.Draw(dummy)
@@ -888,11 +1077,17 @@ def _make_header(title: str, path: list[str], width: int) -> Image.Image:
     # Separator line at bottom
     draw.line([(0, header_h - 1), (width - 1, header_h - 1)], fill=(0, 170, 170, 200))
 
-    # Title row
+    # Title row (left)
     draw.text((pad, pad), title or "Untitled", fill=(255, 255, 85, 255), font=title_font)
 
+    # Info string: right-aligned in the title row
+    if info:
+        info_w = dd.textbbox((0, 0), info, font=info_font)[2]
+        info_y = pad + (title_h - (dd.textbbox((0, 0), info, font=info_font)[3])) // 2
+        draw.text((width - info_w - pad, info_y), info, fill=(85, 200, 200, 180), font=info_font)
+
     # Breadcrumb path row
-    breadcrumb = "  \u25b8  ".join(p.title() for p in path) if path else ""
+    breadcrumb = "  \u25b8  ".join(path) if path else ""
     draw.text((pad, pad + title_h + pad), breadcrumb, fill=(85, 255, 255, 200), font=path_font)
 
     return img
@@ -911,6 +1106,7 @@ def grid_to_png(
     legend: bool = False,
     title: str = "",
     path: list[str] | None = None,
+    info: str = "",
     classification: dict[int, str] | None = None,
 ) -> bytes:
     """Convert a rendered NM grid to a PNG byte string.
@@ -973,8 +1169,8 @@ def grid_to_png(
         img = combined
 
     # Title / hierarchy header bar
-    if title or path:
-        hdr = _make_header(title, path or [], img.width)
+    if title or path or info:
+        hdr = _make_header(title, path or [], img.width, info=info)
         final = Image.new("RGBA", (img.width, hdr.height + img.height), (10, 10, 40, 255))
         final.paste(hdr, (0, 0))
         final.paste(img, (0, hdr.height))
