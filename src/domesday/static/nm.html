@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BBC Domesday · NM Grid Map</title>
+  <style>
+    :root {
+      --bg: #000030; --panel: #00003A; --accent: #00CCFF; --accent-cyan: #00CCFF;
+      --accent-yellow: #FFD700; --text: #FFFFFF; --dim: #7AAFC8;
+      --border: rgba(0,204,255,0.28);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace;
+           display: flex; flex-direction: column; min-height: 100vh; }
+
+    /* Title bar */
+    #title-bar { background: var(--accent); color: #000050; display: flex;
+                 justify-content: space-between; align-items: center;
+                 padding: 0.45rem 1rem; font-size: 1.05rem; font-weight: bold;
+                 letter-spacing: 0.15em; text-transform: uppercase; user-select: none; flex-shrink: 0; }
+    #title-bar a { color: #000050; text-decoration: none; font-size: 0.8rem;
+                   letter-spacing: 0.05em; border: 1px solid #000050; padding: 2px 8px;
+                   border-radius: 3px; }
+    #title-bar a:hover { background: rgba(0,0,80,0.15); }
+
+    /* Main layout: 2 columns */
+    #nm-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+    /* Left panel */
+    #nm-browser { width: 320px; flex-shrink: 0; display: flex; flex-direction: column;
+                  gap: 4px; padding: 8px; border-right: 1px solid var(--border);
+                  overflow-y: auto; font-size: 0.75rem; }
+    #nm-type-filter { display: flex; gap: 10px; color: var(--dim); }
+    #nm-type-filter label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    #nm-search { width: 100%; background: #000830; border: 1px solid var(--border);
+                 color: var(--text); font-family: inherit; font-size: 0.75rem;
+                 padding: 3px 5px; border-radius: 3px; }
+    #nm-tree { overflow-y: auto; flex: 1; border: 1px solid var(--border); min-height: 0; }
+    .nm-cat-row { padding: 3px 6px; cursor: pointer; user-select: none;
+                  display: flex; justify-content: space-between; align-items: center;
+                  border-bottom: 1px solid #111; }
+    .nm-cat-row.depth-0 { font-weight: bold; color: var(--accent-cyan); background: #001020; }
+    .nm-cat-row.depth-1 { color: var(--dim); background: #000a18; }
+    .nm-cat-row.depth-2 { color: #557799; background: #000814; }
+    .nm-cat-row.depth-3 { color: #446688; background: #000610; }
+    .nm-cat-row:hover { background: #001830; }
+    .nm-cat-row.open { color: var(--accent-yellow) !important; }
+    .nm-count { font-size: 0.65rem; color: var(--dim); }
+    .nm-ds-item { cursor: pointer; display: flex; gap: 6px; align-items: baseline;
+                  border-bottom: 1px solid #0a0a1a; font-size: 0.72rem; }
+    .nm-ds-item:hover { background: #001830; }
+    .nm-ds-item.selected { background: #002040; color: var(--accent-yellow); }
+    .nm-ds-item.type-other { color: #445; }
+    .nm-ds-name { flex: 1; }
+    .nm-ds-badge { font-size: 0.6rem; color: var(--dim); padding: 0 3px;
+                   border: 1px solid #334; border-radius: 2px; }
+    .nm-ds-recno { font-size: 0.6rem; color: #446; }
+
+    /* Right panel */
+    #nm-render-panel { flex: 1; display: flex; flex-direction: column; padding: 8px;
+                       gap: 8px; overflow-y: auto; min-width: 0; }
+
+    /* Map section: image left, controls right */
+    #nm-top-row { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+    #nm-map-wrap { position: relative; display: inline-block; flex-shrink: 0; }
+    #nm-map-img { display: block; max-height: 360px; image-rendering: pixelated; cursor: crosshair; }
+    #nm-map-canvas { position: absolute; top: 0; left: 0; cursor: crosshair; pointer-events: none; }
+
+    #nm-controls-col { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 220px; }
+    #nm-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+    #nm-presets button { font-size: 0.7rem; padding: 2px 8px; background: transparent;
+                         border: 1px solid var(--border); color: var(--dim); cursor: pointer;
+                         border-radius: 3px; font-family: inherit;
+                         transition: border-color 0.15s, color 0.15s; }
+    #nm-presets button:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+
+    /* Coordinate grid: label | Min | Max | Size */
+    #nm-coords { display: grid; grid-template-columns: auto repeat(3, 5rem); gap: 3px 6px;
+                 align-items: center; font-size: 0.75rem; color: var(--dim); }
+    #nm-coords span.col-hdr { font-size: 0.65rem; color: #557; text-align: center; }
+    #nm-coords input[type=number] { width: 5rem; background: #000830; border: 1px solid var(--border);
+                                    color: var(--text); font-family: inherit; font-size: 0.75rem;
+                                    padding: 2px 4px; border-radius: 3px; text-align: right; }
+
+    /* Render controls */
+    #nm-render-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+                          font-size: 0.75rem; color: var(--dim); }
+    #nm-render-controls label { display: flex; align-items: center; gap: 4px; }
+    #nm-render-controls select, #nm-render-controls input[type=number] {
+      background: #000830; border: 1px solid var(--border); color: var(--text);
+      font-family: inherit; font-size: 0.75rem; padding: 2px 4px; border-radius: 3px; }
+    #nm-render-controls #nm-mode { min-width: 12rem; }
+    #nm-render-controls input[type=number] { width: 3rem; }
+    #nm-render-btn { background: transparent; border: 1px solid var(--accent-yellow);
+                     color: var(--accent-yellow); font-family: inherit; font-size: 0.75rem;
+                     padding: 3px 12px; cursor: pointer; border-radius: 3px;
+                     transition: background 0.15s, color 0.15s; }
+    #nm-render-btn:hover { background: var(--accent-yellow); color: #000030; }
+    #nm-render-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #nm-info-btn { background: transparent; border: 1px solid var(--border);
+                   color: var(--dim); font-family: inherit; font-size: 0.75rem;
+                   padding: 3px 10px; cursor: pointer; border-radius: 3px; }
+    #nm-info-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+
+    #nm-status { font-size: 0.7rem; color: var(--dim); min-height: 1em; }
+    #nm-img-container { overflow: auto; display: flex; justify-content: center; }
+    #nm-img { image-rendering: pixelated; image-rendering: crisp-edges; max-width: 100%;
+               border: 1px solid var(--border); }
+
+    details#nm-info-panel { margin-top: 4px; }
+    #nm-info-summary { cursor: pointer; color: var(--accent-cyan); font-size: 0.8rem; }
+    #nm-info-content { white-space: pre-wrap; font-size: 0.85em; max-height: 20em;
+                       overflow-y: auto; padding: 6px; background: #111;
+                       border: 1px solid #333; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="title-bar">
+    <span>BBC Domesday &middot; National Mappable Grid Map</span>
+    <a href="/domesday-navigator/NationalA/walk/Gallery/view/1/">&larr; National Gallery</a>
+  </div>
+
+  <div id="nm-layout">
+    <!-- Left panel: dataset browser -->
+    <div id="nm-browser">
+      <div id="nm-type-filter">
+        <label><input type="radio" name="nm-type" value="1" checked onchange="_nmRenderTree()"> Grid maps only</label>
+        <label><input type="radio" name="nm-type" value="all" onchange="_nmRenderTree()"> All types</label>
+      </div>
+      <input id="nm-search" type="text" placeholder="Search name or record no&hellip;" oninput="_nmSearchDebounce()">
+      <div id="nm-tree"><em style="color:var(--dim);font-size:0.7rem">Loading&hellip;</em></div>
+    </div>
+
+    <!-- Right panel -->
+    <div id="nm-render-panel">
+      <div id="nm-top-row">
+        <!-- Map image -->
+        <div id="nm-map-wrap">
+          <img id="nm-map-img" src="/frame/28995" alt="GB grid map selector" onload="_nmMapLoaded()">
+          <canvas id="nm-map-canvas"></canvas>
+        </div>
+
+        <!-- Controls column -->
+        <div id="nm-controls-col">
+          <div id="nm-presets">
+            <button onclick="nmPreset('gb')">GB</button>
+            <button onclick="nmPreset('england')">England</button>
+            <button onclick="nmPreset('scotland')">Scotland</button>
+            <button onclick="nmPreset('wales')">Wales</button>
+            <button onclick="nmPreset('ni')">N. Ireland</button>
+            <button onclick="nmPreset('ci')">Channel Is.</button>
+          </div>
+
+          <div id="nm-coords">
+            <span></span>
+            <span class="col-hdr">Min</span>
+            <span class="col-hdr">Max</span>
+            <span class="col-hdr">Size</span>
+            <span>E:</span>
+            <input type="number" id="nm-e-min" value="194" oninput="_nmSyncCoords('e','min')">
+            <input type="number" id="nm-e-max" value="394" oninput="_nmSyncCoords('e','max')">
+            <input type="number" id="nm-e-size" value="200" min="1" oninput="_nmSyncCoords('e','size')">
+            <span>N:</span>
+            <input type="number" id="nm-n-min" value="263" oninput="_nmSyncCoords('n','min')">
+            <input type="number" id="nm-n-max" value="413" oninput="_nmSyncCoords('n','max')">
+            <input type="number" id="nm-n-size" value="150" min="1" oninput="_nmSyncCoords('n','size')">
+          </div>
+
+          <div id="nm-render-controls">
+            <label>Colours: <select id="nm-mode">
+              <option value="bands">5-band BBC</option>
+              <option value="distinct">Distinct (golden hues)</option>
+              <option value="viridis">Viridis</option>
+              <option value="greyscale">Greyscale</option>
+            </select></label>
+            <label>Scale: <input type="number" id="nm-scale" value="1" min="1" max="8">&times;</label>
+            <label><input type="checkbox" id="nm-legend"> Legend</label>
+            <button id="nm-render-btn" onclick="renderNmMap()">Render Map</button>
+            <button id="nm-info-btn" onclick="fetchNmInfo()" title="Show dataset description">Info</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="nm-status"></div>
+      <div id="nm-img-container"><img id="nm-img" alt="NM grid map" style="display:none"></div>
+      <details id="nm-info-panel" style="display:none;margin-top:8px">
+        <summary id="nm-info-summary">Dataset info</summary>
+        <div id="nm-info-content"></div>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    // ── State ────────────────────────────────────────────────────────────────
+    let _nmMapDragSetup    = false;
+    let _nmCat             = [];
+    let _nmTreeRoot        = null;
+    let _nmSelectedRecord  = null;
+    let _nmOpenPath        = [];   // array of segment strings → open path in accordion
+    let _nmSearchTimer     = null;
+
+    // ── Map calibration (GB main grid on frame 28995) ────────────────────────
+    // Derived from pixel positions of axis tick marks in the 720×576 frame image.
+    const NM_MAP_CAL = {
+      e_x0: 0.620, e_km0: 100,
+      e_x1: 0.857, e_km1: 700,
+      n_y0: 0.833, n_km0: 0,
+      n_y1: 0.233, n_km1: 1100,
+    };
+
+    // ── Preset regions ───────────────────────────────────────────────────────
+    const NM_PRESETS = {
+      gb:       { e_min: 0,   n_min: 0,    e_max: 700, n_max: 1300 },
+      england:  { e_min: 82,  n_min: 0,    e_max: 656, n_max: 660  },
+      scotland: { e_min: 0,   n_min: 530,  e_max: 470, n_max: 1220 },
+      wales:    { e_min: 147, n_min: 170,  e_max: 355, n_max: 395  },
+      ni:       { e_min: 0,   n_min: 300,  e_max: 200, n_max: 480  },
+      ci:       { e_min: 340, n_min: -90,  e_max: 440, n_max: 0    },
+    };
+
+    // ── NI / Channel Islands insets on frame 28995 ───────────────────────────
+    // Pixel-space bounds (as fractions of image size) for visual insets on frame 28995.
+    // Adjust x0/y0/x1/y1 after verifying against the actual frame image.
+    const NM_INSETS = {
+      ni: {
+        px: { x0: 0.03, y0: 0.30, x1: 0.22, y1: 0.56 },
+        preset: NM_PRESETS.ni,
+      },
+      ci: {
+        px: { x0: 0.03, y0: 0.62, x1: 0.20, y1: 0.80 },
+        preset: NM_PRESETS.ci,
+      },
+    };
+
+    // ── API helper ───────────────────────────────────────────────────────────
+    async function apiGet(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+      return r.json();
+    }
+
+    // ── Coordinate sync ──────────────────────────────────────────────────────
+    function _nmSyncCoords(axis, changed) {
+      const min  = document.getElementById(`nm-${axis}-min`);
+      const max  = document.getElementById(`nm-${axis}-max`);
+      const size = document.getElementById(`nm-${axis}-size`);
+      const a = parseFloat(min.value), b = parseFloat(max.value), s = parseFloat(size.value);
+      if (changed === 'min')  { if (!isNaN(a) && !isNaN(s)) max.value  = a + s; }
+      else if (changed === 'max')  { if (!isNaN(a) && !isNaN(b)) size.value = b - a; }
+      else if (changed === 'size') { if (!isNaN(a) && !isNaN(s)) max.value  = a + s; }
+      _nmDrawRect();
+    }
+
+    function _nmSetRegion(eMin, eMax, nMin, nMax) {
+      document.getElementById('nm-e-min').value  = eMin;
+      document.getElementById('nm-e-max').value  = eMax;
+      document.getElementById('nm-e-size').value = eMax - eMin;
+      document.getElementById('nm-n-min').value  = nMin;
+      document.getElementById('nm-n-max').value  = nMax;
+      document.getElementById('nm-n-size').value = nMax - nMin;
+      _nmDrawRect();
+    }
+
+    function nmPreset(key) {
+      const p = NM_PRESETS[key];
+      _nmSetRegion(p.e_min, p.e_max, p.n_min, p.n_max);
+    }
+
+    // ── Map helpers ──────────────────────────────────────────────────────────
+    function _nmFracToKm(fx, fy) {
+      const c = NM_MAP_CAL;
+      const E = c.e_km0 + (fx - c.e_x0) * (c.e_km1 - c.e_km0) / (c.e_x1 - c.e_x0);
+      const N = c.n_km0 + (fy - c.n_y0) * (c.n_km1 - c.n_km0) / (c.n_y1 - c.n_y0);
+      return { E: Math.round(E), N: Math.round(N) };
+    }
+
+    function _nmClamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    function _nmInsetForCoords(eMin, eMax, nMin, nMax) {
+      for (const ins of Object.values(NM_INSETS)) {
+        const p = ins.preset;
+        if (eMin === p.e_min && eMax === p.e_max && nMin === p.n_min && nMax === p.n_max)
+          return ins.px;
+      }
+      return null;
+    }
+
+    function _nmInsetHit(fx, fy) {
+      for (const ins of Object.values(NM_INSETS)) {
+        const p = ins.px;
+        if (fx >= p.x0 && fx <= p.x1 && fy >= p.y0 && fy <= p.y1) return ins;
+      }
+      return null;
+    }
+
+    function _nmMapLoaded() {
+      const img    = document.getElementById('nm-map-img');
+      const canvas = document.getElementById('nm-map-canvas');
+      canvas.width  = img.offsetWidth;
+      canvas.height = img.offsetHeight;
+      if (!_nmMapDragSetup) { _nmSetupMapDrag(); _nmMapDragSetup = true; }
+      _nmDrawRect();
+    }
+
+    function _nmDrawRect() {
+      const canvas = document.getElementById('nm-map-canvas');
+      const img    = document.getElementById('nm-map-img');
+      if (!img.complete || !img.naturalWidth) return;
+      canvas.width  = img.offsetWidth;
+      canvas.height = img.offsetHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const eMin = parseFloat(document.getElementById('nm-e-min').value);
+      const eMax = parseFloat(document.getElementById('nm-e-max').value);
+      const nMin = parseFloat(document.getElementById('nm-n-min').value);
+      const nMax = parseFloat(document.getElementById('nm-n-max').value);
+      if (isNaN(eMin) || isNaN(eMax) || isNaN(nMin) || isNaN(nMax)) return;
+
+      // Check if this matches an inset preset — draw on the inset area instead
+      const insetPx = _nmInsetForCoords(eMin, eMax, nMin, nMax);
+      if (insetPx) {
+        const x0 = insetPx.x0 * canvas.width,  x1 = insetPx.x1 * canvas.width;
+        const y0 = insetPx.y0 * canvas.height,  y1 = insetPx.y1 * canvas.height;
+        ctx.strokeStyle = 'rgba(0,220,255,0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        return;
+      }
+
+      // Normal GB grid calibration
+      const c = NM_MAP_CAL;
+      const toX = km => (c.e_x0 + (km - c.e_km0) * (c.e_x1 - c.e_x0) / (c.e_km1 - c.e_km0)) * canvas.width;
+      const toY = km => (c.n_y0 + (km - c.n_km0) * (c.n_y1 - c.n_y0) / (c.n_km1 - c.n_km0)) * canvas.height;
+      const x0 = toX(eMin), x1 = toX(eMax);
+      const y0 = toY(nMax), y1 = toY(nMin);  // nMax → top (smaller y)
+      ctx.strokeStyle = 'rgba(255,220,0,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    function _nmSetupMapDrag() {
+      const wrap   = document.getElementById('nm-map-wrap');
+      const canvas = document.getElementById('nm-map-canvas');
+      let dragStart = null, dragging = false;
+
+      wrap.addEventListener('mousedown', e => {
+        const r = wrap.getBoundingClientRect();
+        dragStart = { x: e.clientX - r.left, y: e.clientY - r.top };
+        dragging = false;
+        e.preventDefault();
+      });
+
+      wrap.addEventListener('mousemove', e => {
+        if (!dragStart) return;
+        const r  = wrap.getBoundingClientRect();
+        const cx = e.clientX - r.left, cy = e.clientY - r.top;
+        const dx = cx - dragStart.x;
+        if (Math.abs(dx) > 4) {
+          dragging = true;
+          const eW = Math.abs(dx), nH = eW * (3 / 4);
+          const x0 = dx >= 0 ? dragStart.x : cx;
+          const y0 = dragStart.y - (dx >= 0 ? 0 : nH);
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.strokeStyle = 'rgba(0,255,200,0.8)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(x0, y0, eW, nH);
+          const km0 = _nmFracToKm(x0 / canvas.width, y0 / canvas.height);
+          const km1 = _nmFracToKm((x0 + eW) / canvas.width, (y0 + nH) / canvas.height);
+          document.getElementById('nm-status').textContent =
+            `E ${km0.E}&ndash;${km1.E} km &middot; N ${km1.N}&ndash;${km0.N} km`;
+        }
+      });
+
+      wrap.addEventListener('mouseup', e => {
+        if (!dragStart) return;
+        const r  = wrap.getBoundingClientRect();
+        const cx = e.clientX - r.left, cy = e.clientY - r.top;
+        const fx = cx / canvas.width, fy = cy / canvas.height;
+        const dx = cx - dragStart.x;
+
+        if (!dragging) {
+          // Check inset hit first
+          const ins = _nmInsetHit(fx, fy);
+          if (ins) {
+            _nmSetRegion(ins.preset.e_min, ins.preset.e_max, ins.preset.n_min, ins.preset.n_max);
+          } else {
+            // Single click: centre ±100km E, ±75km N
+            const km = _nmFracToKm(fx, fy);
+            _nmSetRegion(
+              _nmClamp(km.E - 100, -200, 700), _nmClamp(km.E + 100, -200, 800),
+              _nmClamp(km.N -  75, -200, 1300), _nmClamp(km.N +  75, -200, 1400)
+            );
+          }
+        } else {
+          const eW = Math.abs(dx), nH = eW * (3 / 4);
+          const x0 = dx >= 0 ? dragStart.x : cx;
+          const y0 = dragStart.y - (dx >= 0 ? 0 : nH);
+          const km0 = _nmFracToKm(x0 / canvas.width, y0 / canvas.height);
+          const km1 = _nmFracToKm((x0 + eW) / canvas.width, (y0 + nH) / canvas.height);
+          _nmSetRegion(
+            Math.min(km0.E, km1.E), Math.max(km0.E, km1.E),
+            Math.min(km0.N, km1.N), Math.max(km0.N, km1.N)
+          );
+        }
+        dragStart = null; dragging = false;
+      });
+
+      wrap.addEventListener('mouseleave', () => { dragStart = null; dragging = false; });
+    }
+
+    // ── Catalogue + tree ─────────────────────────────────────────────────────
+    function _nmBuildTree(entries) {
+      const root = { children: {}, items: [], hasType1: false };
+      for (const e of entries) {
+        let node = root;
+        for (const seg of (e.path || [])) {
+          if (!node.children[seg])
+            node.children[seg] = { children: {}, items: [], hasType1: false };
+          node = node.children[seg];
+        }
+        node.items.push(e);
+        if (e.item_type === 1) {
+          // propagate hasType1 upwards through all ancestors
+          let n2 = root;
+          n2.hasType1 = true;
+          for (const seg of (e.path || [])) {
+            n2 = n2.children[seg];
+            n2.hasType1 = true;
+          }
+        }
+      }
+      return root;
+    }
+
+    function _nmTypeFilter() {
+      const r = document.querySelector('input[name="nm-type"]:checked');
+      return r ? r.value : '1';
+    }
+
+    function _nmSearchDebounce() {
+      clearTimeout(_nmSearchTimer);
+      _nmSearchTimer = setTimeout(_nmRenderTree, 220);
+    }
+
+    function _nmRenderTree() {
+      const treeEl = document.getElementById('nm-tree');
+      const query  = document.getElementById('nm-search').value.trim();
+      const typeF  = _nmTypeFilter();
+      treeEl.innerHTML = '';
+
+      if (query) {
+        const isNum = /^\d+$/.test(query);
+        const q = query.toLowerCase();
+        const matches = _nmCat.filter(e =>
+          isNum ? String(e.record_no) === query : e.name.toLowerCase().includes(q)
+        );
+        if (!matches.length) {
+          treeEl.innerHTML = '<div style="padding:6px;color:var(--dim);font-size:0.7rem">No matches</div>';
+        } else {
+          matches.forEach(e => treeEl.appendChild(_nmMakeItem(e, typeF)));
+        }
+        return;
+      }
+
+      if (!_nmTreeRoot) return;
+      _nmRenderNode(treeEl, _nmTreeRoot, [], typeF);
+    }
+
+    function _nmRenderNode(container, node, pathSoFar, typeF) {
+      // Render children of this node as accordion rows
+      for (const [seg, child] of Object.entries(node.children)) {
+        if (typeF === '1' && !child.hasType1) continue;
+        const depth = pathSoFar.length;
+        const childPath = [...pathSoFar, seg];
+        const isOpen = _nmOpenPath.length >= childPath.length &&
+                       childPath.every((s, i) => _nmOpenPath[i] === s);
+        const total = _nmCountFiltered(child, typeF);
+
+        const row = document.createElement('div');
+        row.className = `nm-cat-row depth-${Math.min(depth, 3)}` + (isOpen ? ' open' : '');
+        row.style.paddingLeft = (6 + depth * 10) + 'px';
+        row.innerHTML = `<span>${isOpen ? '&#9660;' : '&#9658;'} ${seg}</span><span class="nm-count">${total}</span>`;
+        row.onclick = ev => {
+          ev.stopPropagation();
+          if (isOpen) {
+            // Close: truncate path to parent level
+            _nmOpenPath = pathSoFar.slice();
+          } else {
+            _nmOpenPath = childPath.slice();
+          }
+          _nmRenderTree();
+        };
+        container.appendChild(row);
+
+        if (isOpen) {
+          // Render this child's sub-children recursively
+          _nmRenderNode(container, child, childPath, typeF);
+          // Then render leaf items at this level
+          child.items.forEach(e => {
+            if (typeF === '1' && e.item_type !== 1) return;
+            container.appendChild(_nmMakeItem(e, typeF, depth + 1));
+          });
+        }
+      }
+    }
+
+    function _nmCountFiltered(node, typeF) {
+      let count = typeF === '1'
+        ? node.items.filter(e => e.item_type === 1).length
+        : node.items.length;
+      for (const child of Object.values(node.children)) {
+        count += _nmCountFiltered(child, typeF);
+      }
+      return count;
+    }
+
+    function _nmMakeItem(e, typeF, depth = 0) {
+      const isSelected = _nmSelectedRecord && _nmSelectedRecord.record_no === e.record_no;
+      const div = document.createElement('div');
+      div.className = 'nm-ds-item' +
+        (isSelected ? ' selected' : '') +
+        (e.item_type !== 1 ? ' type-other' : '');
+      div.style.paddingLeft = (24 + depth * 10) + 'px';
+      div.innerHTML =
+        `<span class="nm-ds-name">${e.name}</span>` +
+        `<span class="nm-ds-recno">#${e.record_no}</span>` +
+        (e.item_type !== 1 ? `<span class="nm-ds-badge">T${e.item_type}</span>` : '');
+      div.onclick = () => {
+        _nmSelectedRecord = e;
+        document.getElementById('nm-status').textContent = 'Selected: ' + e.name;
+        _nmRenderTree();
+      };
+      return div;
+    }
+
+    // ── Render ───────────────────────────────────────────────────────────────
+    async function renderNmMap() {
+      if (!_nmSelectedRecord) {
+        document.getElementById('nm-status').textContent = 'Select a dataset first.';
+        return;
+      }
+      const recNo  = _nmSelectedRecord.record_no;
+      const eMin   = document.getElementById('nm-e-min').value;
+      const eMax   = document.getElementById('nm-e-max').value;
+      const nMin   = document.getElementById('nm-n-min').value;
+      const nMax   = document.getElementById('nm-n-max').value;
+      const mode   = document.getElementById('nm-mode').value;
+      const scale  = document.getElementById('nm-scale').value;
+      const legend = document.getElementById('nm-legend').checked ? 'true' : 'false';
+      const btn    = document.getElementById('nm-render-btn');
+      const img    = document.getElementById('nm-img');
+      const status = document.getElementById('nm-status');
+
+      btn.disabled = true;
+      img.style.display = 'none';
+      status.textContent = 'Rendering\u2026';
+
+      const url = `/api/nm/render.png?record_no=${recNo}&e_min=${eMin}&n_min=${nMin}&e_max=${eMax}&n_max=${nMax}&mode=${mode}&scale=${scale}&legend=${legend}`;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(resp.status + ' ' + await resp.text());
+        const blob = await resp.blob();
+        img.src = URL.createObjectURL(blob);
+        img.style.display = 'block';
+        const px = scale > 1 ? `${scale}\u00d7${scale} px = 1 km\u00b2` : '1 px = 1 km\u00b2';
+        status.textContent = `${eMax - eMin} \u00d7 ${nMax - nMin} km \u00b7 ${px} \u00b7 mode: ${mode}`;
+        if (_nmSelectedRecord)
+          document.querySelector('#title-bar span').textContent =
+            'BBC Domesday \u00b7 ' + _nmSelectedRecord.name;
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function fetchNmInfo() {
+      if (!_nmSelectedRecord) return;
+      const recNo   = _nmSelectedRecord.record_no;
+      const panel   = document.getElementById('nm-info-panel');
+      const summary = document.getElementById('nm-info-summary');
+      const content = document.getElementById('nm-info-content');
+      panel.style.display = 'block';
+      summary.textContent = 'Loading\u2026';
+      content.textContent = '';
+      try {
+        const data = await apiGet(`/api/nm/text?record_no=${recNo}`);
+        summary.textContent = data.title || _nmSelectedRecord.name;
+        let text = '';
+        if (data.pages && data.pages.length > 0) text += data.pages.join('\n\n---\n\n');
+        if (data.classification && Object.keys(data.classification).length > 0) {
+          text += '\n\n--- Classification ---\n';
+          for (const [k, v] of Object.entries(data.classification)) text += `  ${k}: ${v}\n`;
+        }
+        content.textContent = text || '(no text available)';
+        panel.open = true;
+      } catch (err) {
+        summary.textContent = 'Error loading info';
+        content.textContent = err.message;
+        panel.open = true;
+      }
+    }
+
+    // ── Boot ─────────────────────────────────────────────────────────────────
+    (async () => {
+      try {
+        _nmCat = await apiGet('/api/nm/catalogue');
+        _nmTreeRoot = _nmBuildTree(_nmCat);
+        _nmRenderTree();
+        document.getElementById('nm-status').textContent = _nmCat.length + ' NM datasets loaded';
+      } catch (err) {
+        document.getElementById('nm-tree').innerHTML =
+          '<em style="color:red;font-size:0.7rem">Failed to load catalogue</em>';
+        document.getElementById('nm-status').textContent = 'Error: ' + err.message;
+      }
+      // If map image already loaded (cached)
+      const img = document.getElementById('nm-map-img');
+      if (img.complete && img.naturalWidth) _nmMapLoaded();
+    })();
+  </script>
+</body>
+</html>
